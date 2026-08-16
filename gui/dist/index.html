@@ -8,48 +8,105 @@
     <link rel="stylesheet" href="app.css" />
   </head>
   <body>
+    <!-- Icons are defined once and referenced with <use>, so a button is one
+         short element rather than a dozen lines of path data. -->
+    <svg class="sprite" aria-hidden="true">
+      <symbol id="i-plus" viewBox="0 0 14 14">
+        <path d="M7 2.5v9M2.5 7h9" />
+      </symbol>
+      <symbol id="i-search" viewBox="0 0 14 14">
+        <circle cx="6.2" cy="6.2" r="4" />
+        <path d="M9.2 9.2 12 12" />
+      </symbol>
+      <symbol id="i-close" viewBox="0 0 12 12">
+        <path d="M2 2 10 10M10 2 2 10" />
+      </symbol>
+      <!-- A panel with its right column filled: what the button does, rather
+           than a globe, which would only say "web". -->
+      <symbol id="i-panel" viewBox="0 0 16 14">
+        <rect x="1" y="1.5" width="14" height="11" rx="2" />
+        <path d="M10 1.5v11" />
+      </symbol>
+      <symbol id="i-min" viewBox="0 0 12 12"><path d="M2 6h8" /></symbol>
+      <symbol id="i-max" viewBox="0 0 12 12">
+        <rect x="2.5" y="2.5" width="7" height="7" rx="1" />
+      </symbol>
+      <symbol id="i-restore" viewBox="0 0 12 12">
+        <rect x="2" y="4" width="6" height="6" rx="1" />
+        <path d="M4.5 4V2.5h5.5V8H8.5" />
+      </symbol>
+      <!-- Three quarters of a circle. Spinning it says "working"; standing
+           still it says "open, but nothing is happening". -->
+      <symbol id="i-spin" viewBox="0 0 16 16">
+        <path d="M8 1.8a6.2 6.2 0 1 1-6.2 6.2" />
+      </symbol>
+    </svg>
+
     <div class="app">
+      <!-- The window's own title bar. The OS one is off, so this carries the
+           drag region and the minimise/maximise/close buttons as well as the
+           active terminal's name. -->
+      <header class="titlebar" id="titlebar">
+        <div class="tb-rail">
+          <span class="tb-brand" data-drag>mux</span>
+          <button class="icon-btn" id="new-btn" title="New terminal">
+            <svg class="ico"><use href="#i-plus" /></svg>
+          </button>
+        </div>
+
+        <!-- Deliberately empty on the left. The rail already names every
+             terminal and marks which one is showing, so repeating the active
+             one up here was the same fact twice. -->
+        <div class="tb-main" data-drag>
+          <span class="spacer" data-drag></span>
+
+          <!-- Shown only when a newer release exists. -->
+          <button class="chip" id="update-chip" hidden></button>
+
+          <button class="icon-btn" id="browser-btn" title="Browser sidebar">
+            <svg class="ico"><use href="#i-panel" /></svg>
+          </button>
+
+          <div class="win-controls">
+            <button class="win-btn" id="win-min" title="Minimise">
+              <svg class="ico"><use href="#i-min" /></svg>
+            </button>
+            <button class="win-btn" id="win-max" title="Maximise">
+              <svg class="ico"><use id="win-max-icon" href="#i-max" /></svg>
+            </button>
+            <button class="win-btn danger" id="win-close" title="Close">
+              <svg class="ico"><use href="#i-close" /></svg>
+            </button>
+          </div>
+        </div>
+      </header>
+
       <!-- Left: the terminal rail -->
       <aside class="rail">
-        <div class="rail-head">
-          <span class="rail-title">Terminals</span>
-          <span class="rail-count" id="count">0</span>
-        </div>
+        <label class="rail-search">
+          <svg class="ico"><use href="#i-search" /></svg>
+          <input id="filter" placeholder="Search" spellcheck="false" />
+        </label>
 
         <div class="rail-list" id="list"></div>
-
-        <div class="new-row">
-          <button class="new-btn" id="new-btn">
-            <span class="new-plus">+</span>
-            <span id="new-label">New terminal</span>
-          </button>
-          <button class="new-menu-btn" id="shell-btn" title="Choose a shell">⌄</button>
-          <div class="menu" id="shell-menu" hidden></div>
-        </div>
       </aside>
 
       <div class="split" id="split-term"></div>
 
-      <!-- Middle: the active terminal -->
+      <!-- Middle: the active terminal. No header of its own — the title bar
+           above already names it, and a second strip saying the same thing
+           would be chrome for its own sake. -->
       <main class="term-panel">
-        <!-- Deliberately almost invisible: the terminal's name and state are
-             already in the rail, so repeating them here is chrome for its own
-             sake. The controls fade in on hover. -->
-        <header class="panel-head">
-          <span class="spacer"></span>
-          <button class="icon-btn" id="browser-btn" title="Toggle this terminal's browser">
-            ◧
-          </button>
-          <button class="icon-btn" id="close-btn" title="Close this terminal">✕</button>
-        </header>
         <div class="term-host" id="term-host"></div>
       </main>
 
       <div class="split" id="split-browser"></div>
 
       <!-- Right: a real browser webview lives on top of #browser-slot -->
-      <section class="browser-panel" id="browser-panel">
-        <header class="panel-head browser-bar">
+      <section class="browser-panel chrome-hidden" id="browser-panel">
+        <!-- Collapsed to a hover strip by default; see .chrome-hidden. -->
+        <header class="browser-bar" id="browser-bar"
+                title="Address bar — Ctrl+Shift+L">
           <button class="icon-btn" id="back-btn" title="Back">‹</button>
           <button class="icon-btn" id="fwd-btn" title="Forward">›</button>
           <button class="icon-btn" id="reload-btn" title="Reload">⟳</button>
@@ -62,15 +119,23 @@
       </section>
     </div>
 
+    <!-- Right-click a terminal in the rail. Built and positioned at the
+         pointer, so it lives at the top level rather than inside a row that
+         gets thrown away on the next repaint. -->
+    <div class="menu context" id="row-menu" hidden></div>
+
     <!-- Failures used to be invisible: a terminal would exist but never show
          up, with the reason only in a console nobody can open. -->
     <div class="errbar" id="err" hidden>
       <span id="err-text"></span>
-      <button class="icon-btn" id="err-close">✕</button>
+      <button class="icon-btn" id="err-close">
+        <svg class="ico"><use href="#i-close" /></svg>
+      </button>
     </div>
 
     <script src="vendor/xterm.js"></script>
     <script src="vendor/addon-fit.js"></script>
+    <script src="vendor/addon-web-links.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

@@ -139,7 +139,15 @@ pub fn normalise_url(input: &str) -> Option<String> {
     if t.is_empty() {
         return None;
     }
-    if t.starts_with("http://") || t.starts_with("https://") || t.starts_with("about:") {
+    // `file://` is here because terminals print local paths as links, and a
+    // webview shows an image or a text file perfectly well. Without it a
+    // clicked file link fell through to the search-engine branch and searched
+    // the web for the path.
+    if t.starts_with("http://")
+        || t.starts_with("https://")
+        || t.starts_with("file://")
+        || t.starts_with("about:")
+    {
         return Some(t.to_string());
     }
     Some(if !t.contains(' ') && t.contains('.') {
@@ -214,6 +222,14 @@ mod tests {
             normalise_url("http://a.test/x").as_deref(),
             Some("http://a.test/x")
         );
+    }
+
+    #[test]
+    fn a_file_url_opens_rather_than_being_searched_for() {
+        // Terminals print these, and the old rule turned a clicked local path
+        // into a web search for it.
+        let url = "file:///C:/Users/me/Pictures/shot%202023.png";
+        assert_eq!(normalise_url(url).as_deref(), Some(url));
     }
 
     #[test]

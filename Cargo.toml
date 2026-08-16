@@ -12,4 +12,14 @@ anyhow = "1.0.104"
 portable-pty = "0.9.0"
 unicode-width = "0.2.2"
 vte = "0.15.0"
-windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp"] }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_System_Console",
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    # Reading another process's working directory: open it, resolve
+    # NtQueryInformationProcess out of ntdll, read its PEB. See src/cwd.rs.
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+] }

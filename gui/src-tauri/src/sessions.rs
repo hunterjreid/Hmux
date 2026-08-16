@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::io::Read;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -67,10 +68,22 @@ const WORKING_WINDOW: Duration = Duration::from_millis(700);
 struct Session {
     id: SessionId,
     title: String,
+    /// The program that was spawned, kept so the same one can be started again
+    /// when the session is restored.
+    shell: String,
     proc: PtyProcess,
     history: Arc<Mutex<History>>,
     /// When this terminal last produced output.
     last_output: Arc<Mutex<Instant>>,
+}
+
+/// Everything about a live session that is worth writing to disk.
+pub struct Snapshot {
+    pub shell: String,
+    pub scrollback: String,
+    /// Where the shell's process believes it is. Not always where its prompt
+    /// says; see `persist::cwd_from_prompt`.
+    pub cwd: Option<String>,
 }
 
 #[derive(Default)]
@@ -90,11 +103,46 @@ impl Sessions {
         cols: u16,
         rows: u16,
     ) -> Result<SessionId> {
+        self.start(app, shell, None, String::new(), cols, rows)
+    }
+
+    /// Bring a session back: the same shell, in the directory the old one was
+    /// working in, with the old one's output already in its backlog.
+    ///
+    /// The replay is seeded into the history rather than written to the pty,
+    /// so it is text the new shell never sees. Writing it down the pty would
+    /// hand the shell thousands of lines of its predecessor's output as input.
+    pub fn restore(
+        &mut self,
+        app: &AppHandle,
+        shell: &str,
+        cwd: Option<PathBuf>,
+        replay: String,
+        cols: u16,
+        rows: u16,
+    ) -> Result<SessionId> {
+        self.start(app, shell, cwd, replay, cols, rows)
+    }
+
+    fn start(
+        &mut self,
+        app: &AppHandle,
+        shell: &str,
+        cwd: Option<PathBuf>,
+        replay: String,
+        cols: u16,
+        rows: u16,
+    ) -> Result<SessionId> {
         self.next_id += 1;
         let id = self.next_id;
 
-        let (proc, reader) = PtyProcess::spawn(shell, cols, rows)?;
-        let history = Arc::new(Mutex::new(History::default()));
+        let (proc, reader) = PtyProcess::spawn_in(shell, cwd.as_deref(), cols, rows)?;
+        // Sequence numbers start at one, so a replay seeded here is never
+        // mistaken for a chunk the live stream has already delivered.
+        let history = Arc::new(Mutex::new(History {
+            text: replay.into_bytes(),
+            last_seq: 0,
+        }));
         let last_output = Arc::new(Mutex::new(Instant::now()));
 
         spawn_reader(
@@ -121,6 +169,7 @@ impl Sessions {
             Session {
                 id,
                 title,
+                shell: shell.to_string(),
                 proc,
                 history,
                 last_output,
@@ -128,6 +177,28 @@ impl Sessions {
         );
         self.order.push(id);
         Ok(id)
+    }
+
+    /// What this session would need to be recreated. `None` once it is gone.
+    pub fn snapshot_of(&self, id: SessionId) -> Option<Snapshot> {
+        let session = self.map.get(&id)?;
+        let scrollback = session
+            .history
+            .lock()
+            .ok()
+            .map(|h| String::from_utf8_lossy(&h.text).to_string())
+            .unwrap_or_default();
+        let cwd = session
+            .proc
+            .pid()
+            .and_then(mux::cwd::of_process)
+            .map(|p| p.to_string_lossy().into_owned());
+
+        Some(Snapshot {
+            shell: session.shell.clone(),
+            scrollback,
+            cwd,
+        })
     }
 
     pub fn write(&self, id: SessionId, bytes: &[u8]) {

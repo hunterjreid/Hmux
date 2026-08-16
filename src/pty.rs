@@ -24,9 +24,25 @@ pub struct PtyProcess {
 }
 
 impl PtyProcess {
-    /// Start `program` under a new pseudoconsole. Returns the handle plus the
-    /// read side, which the caller is expected to drain on its own thread.
+    /// Start `program` under a new pseudoconsole, in whatever directory mux
+    /// itself is running from. Returns the handle plus the read side, which the
+    /// caller is expected to drain on its own thread.
     pub fn spawn(program: &str, cols: u16, rows: u16) -> Result<(Self, Box<dyn Read + Send>)> {
+        Self::spawn_in(program, None, cols, rows)
+    }
+
+    /// As [`spawn`](Self::spawn), but starting in `cwd`.
+    ///
+    /// Restoring a session needs the shell to come back up where the old one
+    /// left off. Spawning it anywhere else and then writing a `cd` into the pty
+    /// would work, but it puts a command in the history the user never typed
+    /// and races whatever the shell's profile is doing at the time.
+    pub fn spawn_in(
+        program: &str,
+        cwd: Option<&std::path::Path>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(Self, Box<dyn Read + Send>)> {
         let cols = cols.max(1);
         let rows = rows.max(1);
 
@@ -41,8 +57,15 @@ impl PtyProcess {
             .context("failed to open a ConPTY — needs Windows 10 1809 or newer")?;
 
         let mut cmd = CommandBuilder::new(program);
-        if let Ok(cwd) = std::env::current_dir() {
-            cmd.cwd(cwd);
+        // A directory that has since been deleted would make the spawn fail
+        // outright, so fall back rather than refusing to open a terminal.
+        match cwd.filter(|p| p.is_dir()) {
+            Some(dir) => cmd.cwd(dir),
+            None => {
+                if let Ok(here) = std::env::current_dir() {
+                    cmd.cwd(here);
+                }
+            }
         }
 
         // Tell programs what this terminal can actually do.

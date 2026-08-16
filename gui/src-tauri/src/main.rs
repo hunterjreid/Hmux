@@ -16,9 +16,11 @@
 //! [`browser`] for what that costs.
 
 mod browser;
+mod persist;
 mod sessions;
 mod shells;
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -61,6 +63,153 @@ fn ui_log(message: String) {
     log_error(&format!("ui: {message}"));
 }
 
+/// What build this is, for comparing against the newest published release.
+#[tauri::command]
+fn app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+// ---- window frame --------------------------------------------------------
+//
+// The window has no OS decorations, so moving it and the three buttons at the
+// top right are the app's job. These are commands rather than the webview
+// calling the window API directly because the chrome is a *child* webview:
+// a command reaches the window it belongs to without depending on what the
+// multiwebview build injects into it.
+
+fn main_window(app: &tauri::AppHandle) -> Result<tauri::Window, String> {
+    app.get_window("main")
+        .ok_or_else(|| "the main window is gone".to_string())
+}
+
+#[tauri::command]
+fn window_minimize(app: tauri::AppHandle) -> Result<(), String> {
+    main_window(&app)?.minimize().map_err(|e| e.to_string())
+}
+
+/// Returns the state it ended up in, so the button can show the right icon
+/// without asking a second time.
+#[tauri::command]
+fn window_toggle_maximize(app: tauri::AppHandle) -> Result<bool, String> {
+    let window = main_window(&app)?;
+    let maximized = window.is_maximized().map_err(|e| e.to_string())?;
+    if maximized {
+        window.unmaximize().map_err(|e| e.to_string())?;
+    } else {
+        window.maximize().map_err(|e| e.to_string())?;
+    }
+    Ok(!maximized)
+}
+
+#[tauri::command]
+fn window_is_maximized(app: tauri::AppHandle) -> Result<bool, String> {
+    main_window(&app)?.is_maximized().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn window_close(app: tauri::AppHandle) -> Result<(), String> {
+    main_window(&app)?.close().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn window_start_drag(app: tauri::AppHandle) -> Result<(), String> {
+    main_window(&app)?.start_dragging().map_err(|e| e.to_string())
+}
+
+// ---- session persistence -------------------------------------------------
+
+/// Write the session out.
+///
+/// The UI supplies what only it knows — which terminals exist, their order,
+/// what they were renamed to, and what each had beside it. Everything that
+/// needs the OS is filled in here.
+#[tauri::command]
+fn save_layout(
+    state: tauri::State<'_, Mutex<sessions::Sessions>>,
+    mut layout: persist::Layout,
+) -> Result<(), String> {
+    {
+        let sessions = state.lock().map_err(|e| e.to_string())?;
+        for terminal in &mut layout.terminals {
+            let Some(snapshot) = sessions.snapshot_of(terminal.id) else {
+                continue;
+            };
+            terminal.shell = snapshot.shell;
+            terminal.scrollback = persist::trim_scrollback(&snapshot.scrollback);
+            // What the prompt says beats what the OS says: see
+            // `persist::cwd_from_prompt` for why they disagree.
+            terminal.cwd = persist::cwd_from_prompt(&terminal.scrollback)
+                .map(|p| p.to_string_lossy().into_owned())
+                .or(snapshot.cwd);
+        }
+    }
+
+    // Terminals the UI listed but that are already gone would come back as a
+    // shell with no history and no directory, which is worse than not coming
+    // back at all.
+    layout.terminals.retain(|t| !t.shell.is_empty());
+
+    persist::save(&layout).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn load_layout() -> persist::Layout {
+    persist::load()
+}
+
+/// Start a terminal from a saved one: same shell, same directory, with the old
+/// session's output replayed above a rule.
+#[tauri::command]
+fn restore_terminal(
+    state: tauri::State<'_, Mutex<sessions::Sessions>>,
+    pool: tauri::State<'_, Mutex<browser::Pool>>,
+    app: tauri::AppHandle,
+    shell: Option<String>,
+    cwd: Option<String>,
+    scrollback: String,
+    cols: u16,
+    rows: u16,
+) -> Result<SessionId, String> {
+    let shell = shell
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(shells::default_program);
+    let cwd = cwd.filter(|c| !c.is_empty()).map(PathBuf::from);
+
+    let replay = if scrollback.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "{scrollback}{}",
+            persist::restored_marker(cwd.as_deref())
+        )
+    };
+
+    let id = {
+        let mut sessions = state.lock().map_err(|e| e.to_string())?;
+        sessions
+            .restore(&app, &shell, cwd, replay, cols, rows)
+            .map_err(|e| format!("{e:#}"))?
+    };
+
+    assign_browser(&pool, id);
+    Ok(id)
+}
+
+/// Claim one of the browsers built at startup.
+///
+/// Nothing is created here: making a webview once the event loop is running
+/// wedges the main thread, and the command that did it would never return.
+fn assign_browser(pool: &tauri::State<'_, Mutex<browser::Pool>>, id: SessionId) {
+    if let Ok(mut pool) = pool.lock() {
+        if pool.assign(id).is_none() {
+            log_error(&format!(
+                "terminal {id} gets no browser: all {} are in use",
+                browser::POOL_SIZE
+            ));
+        }
+    }
+}
+
 #[derive(Clone, Serialize)]
 pub struct TerminalInfo {
     pub id: SessionId,
@@ -95,18 +244,7 @@ fn create_terminal(
             .map_err(|e| format!("{e:#}"))?
     };
 
-    // Claim one of the browsers built at startup. Nothing is created here:
-    // making a webview once the event loop is running wedges the main thread,
-    // and this command would never return.
-    if let Ok(mut pool) = pool.lock() {
-        if pool.assign(id).is_none() {
-            log_error(&format!(
-                "terminal {id} gets no browser: all {} are in use",
-                browser::POOL_SIZE
-            ));
-        }
-    }
-
+    assign_browser(&pool, id);
     Ok(id)
 }
 
@@ -297,10 +435,25 @@ fn main() {
             browser_history,
             browser_url,
             ui_log,
+            app_version,
+            window_minimize,
+            window_toggle_maximize,
+            window_is_maximized,
+            window_close,
+            window_start_drag,
+            save_layout,
+            load_layout,
+            restore_terminal,
         ])
         .setup(|app| {
+            // No OS title bar: the app draws its own, which is what puts the
+            // active terminal's name and the browser toggle up there instead
+            // of a strip that only holds the window buttons. Resizing from the
+            // edges still works — an undecorated window keeps its frame, it
+            // just stops painting a caption.
             let window = WindowBuilder::new(app, "main")
                 .title("mux")
+                .decorations(false)
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(900.0, 520.0)
                 .build()?;

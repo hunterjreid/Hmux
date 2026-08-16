@@ -1,28 +1,69 @@
-/* mux — dark chrome around a terminal and a browser. */
+/* mux — a slate shell around a terminal and a browser. */
 
 :root {
-  --bg: #14161a;
-  --panel: #1a1d23;
-  --rail: #171a1f;
-  --line: #262b33;
-  --text: #d6dae1;
-  --muted: #7e8794;
-  --accent: #4a9eff;
-  --accent-dim: #1e3a5f;
-  --busy: #3fd07f;
-  --waiting: #d8a13a;
-  --dead: #ff5f56;
+  /* Monokai Dimmed, taken from the theme itself rather than matched by eye.
+     Every value below is a real key out of
+     Cursor/resources/app/extensions/theme-monokai-dimmed, so a terminal here
+     and an editor there are the same grey rather than two greys that nearly
+     agree.
+
+       editor.background                #1e1e1e
+       sideBar.background               #272727
+       activityBar.background           #353535
+       list.hoverBackground             #444444
+       list.inactiveSelectionBackground #4e4e4e
+       editor.foreground                #c5c8c6
+       focusBorder                      #3655b5
+  */
+  --bg: #1e1e1e;
+  --rail: #272727;
+  --panel: #1e1e1e;
+  --chrome: #353535;
+  --elev: #3c3c3c;
+  --elev-hi: #4e4e4e;
+  --row-hover: #3a3a3a;
+  --row-active: #4e4e4e;
+  --line: #3a3a3a;
+  --hair: rgba(255, 255, 255, 0.07);
+
+  /* One easing and two durations for the whole app, so nothing moves at a
+     speed nothing else moves at. Short on purpose: this is for taking the
+     edge off a state change, not for being noticed. */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --fast: 120ms;
+  --med: 190ms;
+  --text: #c5c8c6;
+  --muted: #9b9e9c;
+  --faint: #767676;
+  /* ansiBlue, and the theme's own focus colour. */
+  --accent: #6a7ec8;
+  --accent-dim: rgba(106, 126, 200, 0.2);
+  --focus: #3655b5;
+  /* ansiBrightGreen / ansiBrightYellow / ansiBrightRed. */
+  --busy: #a6e22e;
+  --waiting: #e2e22e;
+  --dead: #f92672;
 
   --rail-w: 232px;
   --browser-w: 460px;
+  --tb-h: 38px;
 
-  /* Campbell's background, so the padding around xterm matches the terminal
-     itself rather than framing it in a slightly different black. */
-  --term-bg: #0c0c0c;
+  /* Matches the xterm theme's background exactly, so the padding around the
+     terminal is the terminal rather than a frame in a slightly different
+     black. Changing one means changing THEME.background in app.js. */
+  --term-bg: #1e1e1e;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Scrollbars, form controls and focus rings are drawn by the engine, and
+   without this it draws them for a light page: the terminal's scrollbar came
+   out as a white arrow button on a bright track, in the corner of an almost
+   black window. */
+:root {
+  color-scheme: dark;
 }
 
 html,
@@ -36,9 +77,32 @@ body {
   user-select: none;
 }
 
+/* The icon definitions themselves are never drawn. Taken out of the layout
+   rather than given `display: none`, which in some engines stops the symbols
+   resolving for the <use> elements that reference them. */
+.sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.ico {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+  flex: none;
+}
+
 .app {
   display: grid;
   grid-template-columns: var(--rail-w) 4px 1fr 4px var(--browser-w);
+  grid-template-rows: var(--tb-h) 1fr;
   height: 100vh;
 }
 
@@ -54,97 +118,225 @@ body {
   display: none;
 }
 
+/* ---------- title bar ---------- */
+/*
+   The window is undecorated, so this bar is the whole of the window frame:
+   what you drag, and where minimise, maximise and close live. It spans the
+   full width above every column, which also keeps the browser webview clear
+   of it — a native webview paints over the app, and anything it covered here
+   would be invisible and unclickable.
+*/
+
+.titlebar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--hair);
+  z-index: 10;
+}
+
+/* Left section, the width of the rail, so the divider below lines up. */
+.tb-rail {
+  position: relative;
+  width: var(--rail-w);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 0 14px;
+  border-right: 1px solid var(--hair);
+}
+
+.tb-brand {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.tb-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 14px;
+}
+
+.spacer {
+  flex: 1;
+  align-self: stretch;
+}
+
+/* `data-drag` marks the parts of the bar that move the window. It carries no
+   style: WebView2 has no `-webkit-app-region`, so app.js watches for a press
+   on those elements and asks Rust to start the drag. */
+
+.win-controls {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  margin-left: 6px;
+}
+
+.win-btn {
+  width: 44px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+.win-btn:hover {
+  background: var(--elev-hi);
+  color: var(--text);
+}
+
+/* Closing the window is the one irreversible button up here. */
+.win-btn.danger:hover {
+  background: #b91c1c;
+  color: #fff;
+}
+
 /* ---------- splitters ---------- */
 
 .split {
-  background: var(--line);
+  grid-row: 2;
+  background: transparent;
   cursor: col-resize;
-  transition: background 0.12s;
+  transition: background var(--med) var(--ease);
 }
 .split:hover,
 .split.dragging {
   background: var(--accent);
 }
 
+#split-term {
+  grid-column: 2;
+  border-left: 1px solid var(--hair);
+}
+#split-browser {
+  grid-column: 4;
+}
+
 /* ---------- left rail ---------- */
 
 .rail {
+  grid-column: 1;
+  grid-row: 2;
   background: var(--rail);
-  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
-.rail-head {
+.rail-search {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 16px 10px;
+  gap: 7px;
+  margin: 10px;
+  padding: 0 9px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--elev);
+  color: var(--faint);
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
 }
 
-.rail-title {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--muted);
+.rail-search:focus-within {
+  border-color: var(--line);
+  background: var(--elev-hi);
 }
 
-.rail-count {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--muted);
-  background: #21252c;
-  border-radius: 10px;
-  padding: 1px 8px;
+.rail-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  user-select: text;
+}
+
+.rail-search input::placeholder {
+  color: var(--faint);
 }
 
 .rail-list {
   flex: 1;
   overflow-y: auto;
-  padding: 0 10px;
+  padding: 0 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 3px;
 }
 
-/* The thick buttons. */
+/* Nothing matched the filter. */
+.rail-empty {
+  padding: 14px 8px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+/* The rows: a name, a second line only when there is something to say, and a
+   spinner on the right only while something is actually happening.
+ *
+ * Nothing is reserved on the left. A gutter held open for an icon that is
+ * usually absent is a column of empty space down the whole rail, and every
+ * name is indented past it for the sake of the rare row that has one.
+ *
+ * A div rather than a button so it can hold interactive children without
+ * nesting one button inside another. */
 .term-btn {
   display: grid;
-  grid-template-columns: 22px 1fr auto;
+  grid-template-columns: 1fr auto;
   grid-template-rows: auto auto;
   align-items: center;
-  gap: 0 10px;
+  gap: 0 9px;
   width: 100%;
-  padding: 13px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #1d2128;
-  color: var(--text);
+  min-height: 36px;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
   text-align: left;
   cursor: pointer;
-  font: inherit;
-  transition: background 0.12s, border-color 0.12s, transform 0.06s;
+  outline: none;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+    color var(--fast) var(--ease);
 }
 
 .term-btn:hover {
-  background: #232830;
-  border-color: #333a45;
+  background: var(--row-hover);
+  color: var(--text);
 }
 
-.term-btn:active {
-  transform: translateY(1px);
+.term-btn:focus-visible {
+  border-color: var(--focus);
 }
 
 .term-btn.active {
-  background: linear-gradient(180deg, #23405f 0%, #1d3busy 100%);
-  background: linear-gradient(180deg, #23405f 0%, #1d3450 100%);
-  border-color: var(--accent);
+  background: var(--row-active);
+  color: var(--text);
 }
 
 .term-btn .name {
-  grid-column: 2;
+  grid-column: 1;
+  grid-row: 1;
   font-weight: 600;
   font-size: 13px;
   white-space: nowrap;
@@ -153,10 +345,10 @@ body {
 }
 
 /* Rename in place: click the name of the terminal you are already in, or
-   double-click any of them. */
-.term-btn .name.editing,
+   double-click any of them, or click the name in the title bar. */
 .rename-input {
-  grid-column: 2;
+  grid-column: 1;
+  grid-row: 1;
   width: 100%;
   padding: 0;
   border: none;
@@ -171,152 +363,166 @@ body {
 }
 
 .term-btn .status {
-  grid-column: 2;
+  grid-column: 1;
+  grid-row: 2;
   font-size: 11px;
-  color: var(--muted);
+  color: var(--faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .term-btn.active .status {
-  color: #a9c8ea;
-}
-
-.term-btn .dot {
-  grid-row: 1 / span 2;
+  color: var(--muted);
 }
 
 /* Output that arrived while you were looking at a different terminal. Clears
    the moment you open it. */
 .term-btn .unread {
-  grid-column: 3;
+  grid-column: 2;
   grid-row: 1 / span 2;
-  min-width: 20px;
-  padding: 2px 6px;
-  border-radius: 10px;
+  min-width: 19px;
+  padding: 1px 6px;
+  border-radius: 9px;
   background: var(--accent);
-  color: #06101d;
+  color: #1e1e1e;
   font-size: 10.5px;
   font-weight: 700;
   text-align: center;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .term-btn.active .unread {
   display: none;
 }
 
-/* A terminal with a browser open gets a marker, so the rail says which ones
-   have one waiting without you having to switch to find out. */
-.term-btn .marks {
-  grid-column: 3;
+/* Status, on the right, and only when there is a status worth having.
+ *
+ * A terminal that is idle, or that is sitting inside a program waiting for
+ * you, shows nothing: those are what a terminal is doing almost all the time,
+ * and marking them marks everything. Motion means work is genuinely being
+ * done, so anything spinning is worth looking at.
+ */
+.state {
+  grid-column: 2;
   grid-row: 1 / span 2;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-/* Status light: grey idle, pulsing green while a command runs, red when dead. */
-.dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #4b525c;
-  display: inline-block;
+  justify-self: center;
+  width: 13px;
+  height: 13px;
   flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  color: transparent;
+  transition: color var(--med) var(--ease);
+  /* Stated rather than relied on: the default origin for a transformed SVG
+     root is not the same in every engine, and being wrong here is a spinner
+     that orbits instead of spinning. */
+  transform-origin: 50% 50%;
 }
 
-/* Actively producing output. */
-.dot.busy {
-  background: var(--busy);
-  animation: pulse 1.2s ease-in-out infinite;
+/* Actively producing output — the only state that moves. */
+.state.busy {
+  color: var(--busy);
+  animation: spin 0.85s linear infinite;
 }
 
-/* A command is open but has gone quiet — almost always waiting on you.
-   Steady, not pulsing: the point is that nothing is happening. */
-.dot.waiting {
-  background: var(--waiting);
+/* A command is open but has gone quiet, which almost always means it is
+   waiting on you. The same arc, standing still: the point is that nothing is
+   happening and it wants a person. */
+.state.waiting {
+  color: var(--waiting);
 }
 
-.dot.dead {
-  background: var(--dead);
+.state.dead {
+  color: var(--dead);
 }
 
-@keyframes pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(63, 208, 127, 0.55);
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
-  50% {
-    box-shadow: 0 0 0 5px rgba(63, 208, 127, 0);
+}
+
+/* The spinner is the only thing in the window that moves on its own, and it is
+   never the only signal: colour and the status text say the same thing. The
+   rest of the motion here is a response to something you did, so it all goes
+   when motion is not wanted. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
 
-.new-row {
-  position: relative;
-  display: flex;
-  gap: 6px;
-  margin: 10px;
-}
+/* ---------- update notice ---------- */
 
-.new-btn {
-  flex: 1;
-  min-width: 0;
-  padding: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px dashed #39414d;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--muted);
+.chip {
+  padding: 3px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 11px;
+  background: var(--accent-dim);
+  color: var(--accent);
   font: inherit;
+  font-size: 11.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  white-space: nowrap;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 
-.new-btn:hover,
-.new-menu-btn:hover {
-  color: var(--busy);
-  border-color: var(--busy);
-  background: rgba(63, 208, 127, 0.06);
+.chip[hidden] {
+  display: none;
 }
 
-.new-menu-btn {
-  width: 34px;
-  flex: none;
-  border: 1px dashed #39414d;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  cursor: pointer;
-  transition: color 0.12s, border-color 0.12s, background 0.12s;
+.chip:not([hidden]) {
+  animation: menu-in var(--med) var(--ease);
 }
+
+.chip:hover {
+  background: var(--accent);
+  color: #1e1e1e;
+}
+
+/* ---------- menus ---------- */
 
 .menu {
   position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  z-index: 20;
+  min-width: 190px;
+  z-index: 30;
   padding: 5px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: #1d2128;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  background: #3c3c3c;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
 }
 
 .menu[hidden] {
   display: none;
 }
 
+/* A menu goes from `display: none` to shown, which no transition can follow,
+   so the arrival is an animation instead. */
+.menu:not([hidden]) {
+  animation: menu-in var(--fast) var(--ease);
+  transform-origin: top left;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+}
+
 .menu button {
   display: block;
   width: 100%;
-  padding: 9px 11px;
+  padding: 8px 10px;
   border: none;
   border-radius: 7px;
   background: transparent;
@@ -324,57 +530,55 @@ body {
   text-align: left;
   font: inherit;
   cursor: pointer;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 
 .menu button:hover {
   background: var(--accent-dim);
 }
 
-.new-plus {
-  font-size: 16px;
-  line-height: 1;
+/* Right-clicking a terminal. Placed at the pointer, so it is positioned
+   against the window rather than against anything it sits inside. */
+.menu.context {
+  position: fixed;
+  min-width: 172px;
+}
+
+.menu button.danger {
+  color: #fca5a5;
+}
+
+.menu button.danger:hover {
+  background: #7f1d1d;
+  color: #fff;
+}
+
+.menu .sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--hair);
 }
 
 /* ---------- panels ---------- */
 
-.term-panel,
-.browser-panel {
+.term-panel {
+  grid-column: 3;
+  grid-row: 2;
   display: flex;
   flex-direction: column;
   min-width: 0;
   background: var(--panel);
+  position: relative;
 }
 
-.panel-head {
+.browser-panel {
+  grid-column: 5;
+  grid-row: 2;
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 8px;
-  height: 30px;
-  flex: none;
+  flex-direction: column;
+  min-width: 0;
   background: var(--panel);
-}
-
-/* The terminal's own header carries no text and no border — it should read as
-   part of the terminal, not as a title bar. Its buttons stay out of the way
-   until the pointer is in the panel. */
-.term-panel > .panel-head {
-  background: var(--term-bg);
-  opacity: 0.25;
-  transition: opacity 0.15s;
-}
-
-.term-panel:hover > .panel-head {
-  opacity: 1;
-}
-
-/* The browser's bar is a real control surface, so it keeps its separator. */
-.browser-panel > .panel-head {
-  border-bottom: 1px solid var(--line);
-}
-
-.spacer {
-  flex: 1;
+  position: relative;
 }
 
 .icon-btn {
@@ -385,30 +589,90 @@ body {
   line-height: 1;
   width: 28px;
   height: 26px;
-  border-radius: 6px;
+  border-radius: 7px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease),
+    transform var(--fast) var(--ease);
+}
+
+.icon-btn:active {
+  transform: scale(0.92);
+}
+
+.icon-btn.narrow {
+  width: 18px;
 }
 
 .icon-btn:hover {
-  background: #262b33;
+  background: var(--elev-hi);
   color: var(--text);
 }
 
 .icon-btn.on {
   background: var(--accent-dim);
-  color: #cfe4ff;
+  color: var(--accent);
 }
 
 .term-host {
   flex: 1;
   min-height: 0;
   background: var(--term-bg);
-  padding: 2px 4px 4px 10px;
+  padding: 8px 4px 4px 12px;
 }
 
 .term-host .xterm {
   height: 100%;
+}
+
+/* There is nothing to scroll to sideways: a terminal is exactly as wide as its
+   columns, and anything wider is a rounding error between what the fit addon
+   measured and what the viewport ended up with. Left to itself the viewport
+   turns that fraction of a pixel into a full horizontal scrollbar across the
+   bottom of the terminal.
+
+   xterm already sets `overflow-y: scroll`, so the vertical bar is always
+   reserved and the usable width never changes on its own.
+
+   The background matters as much as the overflow. A viewport is almost never
+   an exact multiple of the row height, so there is a strip below the last row
+   with nothing drawn in it, and xterm's own stylesheet paints that strip
+   `#000`. Against a black-slate terminal it read as a black bar pinned to the
+   bottom of the pane. */
+.term-host .xterm-viewport {
+  overflow-x: hidden;
+  background-color: var(--term-bg) !important;
+}
+
+/* The engine's own scrollbar, cut down to something that belongs in here:
+   no arrow buttons, no track, and a thumb you only really notice when you
+   are using it. */
+.term-host .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+
+.term-host .xterm-viewport::-webkit-scrollbar-button {
+  display: none;
+}
+
+.term-host .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.term-host .xterm-viewport::-webkit-scrollbar-thumb {
+  border-radius: 5px;
+  /* Inset with a transparent border, so the thumb reads as narrower than the
+     space it needs to reserve. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+  background-color: #4f4f4f;
+}
+
+.term-host .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background-color: #5f5f5f;
 }
 
 /* Each terminal keeps its own xterm instance; only one is shown at a time. */
@@ -416,8 +680,20 @@ body {
   display: none;
   height: 100%;
 }
+
+/* Switching terminals is a cut, which reads as a flicker when the two have
+   very different amounts of text on them. A short fade makes it a change of
+   view rather than a jolt. Opacity only: moving the terminal would mean
+   reflowing it. */
 .term-view.visible {
   display: block;
+  animation: view-in var(--med) var(--ease);
+}
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .term-empty {
@@ -428,18 +704,66 @@ body {
 
 /* ---------- browser ---------- */
 
+/* Deliberately not transitioned.
+ *
+ * The page below this bar is a native webview positioned in absolute
+ * coordinates, which no CSS transition can carry along. Animating the height
+ * meant the bounds were measured while the bar was still moving, so the page
+ * was placed against a height the bar had not reached and drew over it. A
+ * height that changes in one step is measured correctly in one step. */
 .browser-bar {
+  display: flex;
+  align-items: center;
   gap: 4px;
+  padding: 0 8px;
+  height: 34px;
+  flex: none;
+  background: var(--panel);
+  border-bottom: 1px solid var(--hair);
+}
+
+/* Hidden is the default: a browser opens as the page and nothing else. The bar
+   collapses to a strip at the top edge that brings it back on hover — a strip
+   rather than nothing at all because the page below is a native webview that
+   paints over the app, so an overlay there would be unreachable. The strip is
+   the one piece of the top edge the webview does not cover.
+
+   Ctrl+Shift+L opens it from the keyboard and puts the caret in it. */
+.browser-panel.chrome-hidden > .browser-bar {
+  height: 7px;
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+  border-bottom-color: transparent;
+}
+
+.browser-panel.chrome-hidden > .browser-bar > * {
+  display: none;
+}
+
+.browser-panel.chrome-hidden > .browser-bar::after {
+  content: "";
+  display: block;
+  width: 46px;
+  height: 3px;
+  margin: 2px auto;
+  border-radius: 2px;
+  background: var(--line);
+  transition: background 0.12s;
+}
+
+.browser-panel.chrome-hidden > .browser-bar:hover::after {
+  background: var(--accent);
 }
 
 .url-input {
   flex: 1;
   min-width: 0;
   height: 26px;
-  padding: 0 10px;
+  padding: 0 11px;
   border-radius: 13px;
   border: 1px solid var(--line);
-  background: #12151a;
+  background: var(--elev);
   color: var(--text);
   font: inherit;
   font-size: 12px;
@@ -454,7 +778,7 @@ body {
 .browser-slot {
   flex: 1;
   min-height: 0;
-  background: #0f1115;
+  background: #1e1e1e;
 }
 
 /* Browsers come from a fixed pool; past that a terminal has none. */
@@ -479,10 +803,10 @@ body {
   align-items: center;
   gap: 10px;
   padding: 9px 10px 9px 14px;
-  border: 1px solid #7a2a25;
-  border-radius: 8px;
-  background: #2a1614;
-  color: #ffb4ae;
+  border: 1px solid #7f1d1d;
+  border-radius: 9px;
+  background: #3a2226;
+  color: #fca5a5;
   font-size: 12px;
   user-select: text;
 }
