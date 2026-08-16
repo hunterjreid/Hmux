@@ -15,7 +15,9 @@
   --rail-w: 232px;
   --browser-w: 460px;
 
-  --term-bg: #0e1013;
+  /* Campbell's background, so the padding around xterm matches the terminal
+     itself rather than framing it in a slightly different black. */
+  --term-bg: #0c0c0c;
 }
 
 * {
@@ -317,5 +319,45 @@ body {
 .browser-slot {
   flex: 1;
   min-height: 0;
-  background: #000;
+  background: #0f1115;
+}
+
+/* Browsers come from a fixed pool; past that a terminal has none. */
+.browser-slot.empty::after {
+  content: "No browser left for this terminal — close another to free one.";
+  display: block;
+  padding: 24px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* ---------- errors ---------- */
+
+.errbar {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  right: 12px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px 9px 14px;
+  border: 1px solid #7a2a25;
+  border-radius: 8px;
+  background: #2a1614;
+  color: #ffb4ae;
+  font-size: 12px;
+  user-select: text;
+}
+
+.errbar[hidden] {
+  display: none;
+}
+
+.errbar span {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
 }

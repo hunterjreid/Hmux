@@ -9,6 +9,10 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+// The new-tab page reports an empty address, so the bar shows its placeholder
+// instead of an internal asset path.
+const HOME_PAGE = "";
+
 const els = {
   list: document.getElementById("list"),
   count: document.getElementById("count"),
@@ -20,7 +24,42 @@ const els = {
   closeBtn: document.getElementById("close-btn"),
   slot: document.getElementById("browser-slot"),
   url: document.getElementById("url"),
+  err: document.getElementById("err"),
+  errText: document.getElementById("err-text"),
 };
+
+/** Surface a failure instead of swallowing it into the console. */
+function showError(where, e) {
+  const msg = e && e.message ? e.message : String(e);
+  console.error(where, e);
+  if (els.errText) {
+    els.errText.textContent = `${where}: ${msg}`;
+    els.err.hidden = false;
+  }
+  // Also to disk: a release build has no devtools, so the console is a place
+  // errors go to be lost.
+  invoke("ui_log", { message: `${where}: ${msg}` }).catch(() => {});
+}
+
+/** Note something worth having in the log even when nothing went wrong. */
+function logInfo(message) {
+  invoke("ui_log", { message }).catch(() => {});
+}
+
+/**
+ * Reject if a call does not come back in time.
+ *
+ * A command that hangs is worse than one that fails: the UI simply sits there
+ * with no terminal and no explanation. This turns that into a real error.
+ */
+function withTimeout(promise, ms, what) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${what} did not respond within ${ms}ms`)), ms)
+    ),
+  ]);
+}
 
 /** id -> { term, fit, view, info } */
 const terminals = new Map();
@@ -28,27 +67,34 @@ let activeId = null;
 
 // ---------------------------------------------------------------- terminals
 
+// Campbell: the palette the Windows console actually ships with. Using it
+// means colours look the way they do in any other terminal on this machine,
+// rather than being re-mapped into some house style.
+//
+// This only defines the 16 named ANSI colours. The 256-colour cube and 24-bit
+// truecolor pass through untouched, so `\x1b[38;2;r;g;b m` is exact.
 const THEME = {
-  background: "#0e1013",
-  foreground: "#d6dae1",
-  cursor: "#4a9eff",
-  selectionBackground: "#2c4a6e",
-  black: "#14161a",
-  red: "#ff5f56",
-  green: "#3fd07f",
-  yellow: "#e5c07b",
-  blue: "#61afef",
-  magenta: "#c678dd",
-  cyan: "#56b6c2",
-  white: "#d6dae1",
-  brightBlack: "#5c6370",
-  brightRed: "#ff7b72",
-  brightGreen: "#7ee787",
-  brightYellow: "#ffd580",
-  brightBlue: "#79c0ff",
-  brightMagenta: "#d2a8ff",
-  brightCyan: "#7bd7e0",
-  brightWhite: "#ffffff",
+  background: "#0C0C0C",
+  foreground: "#CCCCCC",
+  cursor: "#CCCCCC",
+  cursorAccent: "#0C0C0C",
+  selectionBackground: "#3A3D41",
+  black: "#0C0C0C",
+  red: "#C50F1F",
+  green: "#13A10E",
+  yellow: "#C19C00",
+  blue: "#0037DA",
+  magenta: "#881798",
+  cyan: "#3A96DD",
+  white: "#CCCCCC",
+  brightBlack: "#767676",
+  brightRed: "#E74856",
+  brightGreen: "#16C60C",
+  brightYellow: "#F9F1A5",
+  brightBlue: "#3B78FF",
+  brightMagenta: "#B4009E",
+  brightCyan: "#61D6D6",
+  brightWhite: "#F2F2F2",
 };
 
 function makeTerminal(id) {
@@ -64,6 +110,13 @@ function makeTerminal(id) {
     allowProposedApi: true,
     scrollback: 10000,
     theme: THEME,
+    // Leave colours exactly as the program asked for them. Anything above 1
+    // lets xterm.js quietly lighten or darken text to hit a contrast target,
+    // which means the colour on screen is not the colour that was sent.
+    minimumContrastRatio: 1,
+    // Bold picking the bright variant is long-standing terminal behaviour and
+    // is what the Windows console does.
+    drawBoldTextInBrightColors: true,
   });
 
   const fit = new FitAddon.FitAddon();
@@ -86,6 +139,9 @@ function makeTerminal(id) {
     ready: false,
     lastSeq: 0,
     pending: [],
+    // Each terminal owns a browser; remembering the address here means the bar
+    // shows the right thing the instant you switch, without waiting on a poll.
+    url: HOME_PAGE,
   };
   terminals.set(id, entry);
 
@@ -102,7 +158,7 @@ function makeTerminal(id) {
       }
       entry.pending = [];
     })
-    .catch(console.error);
+    .catch((e) => showError("terminal_backlog", e));
 
   return entry;
 }
@@ -151,11 +207,19 @@ async function selectTerminal(id) {
   syncSize(id);
   entry.term.focus();
   renderButtons();
+
+  // Bring this terminal's own browser forward and park the others.
+  els.url.value = entry.url;
+  pushBrowserBounds();
 }
 
 async function newTerminal() {
   // 80x24 is a placeholder; the real size is sent by syncSize once laid out.
-  const id = await invoke("create_terminal", { shell: null, cols: 80, rows: 24 });
+  const id = await withTimeout(
+    invoke("create_terminal", { shell: null, cols: 80, rows: 24 }),
+    10000,
+    "create_terminal"
+  );
   makeTerminal(id);
   await refresh();
   await selectTerminal(id);
@@ -176,15 +240,23 @@ async function closeTerminal(id) {
     const next = terminals.keys().next();
     if (!next.done) await selectTerminal(next.value);
   }
+  // Re-park browsers: with the last terminal gone there is nothing to show,
+  // and its webview must not be left hanging over the chrome.
+  pushBrowserBounds();
   await refresh();
 }
 
 // ------------------------------------------------------------------ sidebar
 
 function renderButtons() {
-  const infos = [...terminals.values()]
-    .map((e) => e.info)
-    .filter(Boolean);
+  // The UI knows a terminal exists the moment it creates one. Deriving the
+  // button list from the status poller instead meant that if a single status
+  // call failed, every terminal became invisible even though its shell was
+  // running fine.
+  const infos = [...terminals.entries()].map(
+    ([id, e]) =>
+      e.info ?? { id, title: "cmd", status: "starting…", busy: false, alive: true }
+  );
 
   els.count.textContent = String(infos.length);
   els.list.innerHTML = "";
@@ -209,7 +281,7 @@ function renderButtons() {
     els.list.appendChild(btn);
   }
 
-  const active = terminals.get(activeId)?.info;
+  const active = infos.find((i) => i.id === activeId);
   els.activeTitle.textContent = active ? `${active.title} ${active.id}` : "no terminal";
   els.activeStatus.textContent = active
     ? active.busy
@@ -222,10 +294,9 @@ function renderButtons() {
 
 async function refresh() {
   try {
-    const infos = await invoke("list_terminals");
-    applyInfos(infos);
+    applyInfos(await invoke("list_terminals"));
   } catch (e) {
-    console.error(e);
+    showError("list_terminals", e);
   }
 }
 
@@ -245,14 +316,30 @@ function applyInfos(infos) {
 
 let boundsTimer = null;
 
+let boundsFailed = false;
+
 function pushBrowserBounds() {
   const r = els.slot.getBoundingClientRect();
-  invoke("browser_bounds", {
+  invoke("browser_layout", {
+    active: activeId,
     x: r.left,
     y: r.top,
     width: r.width,
     height: r.height,
-  }).catch(() => {});
+  })
+    .then((hasBrowser) => {
+      // Browsers come from a fixed pool, so a terminal can legitimately have
+      // none. Say so rather than leaving a black rectangle.
+      els.slot.classList.toggle("empty", activeId !== null && !hasBrowser);
+    })
+    .catch((e) => {
+    // Reported once: this fires on every resize tick and would otherwise
+    // rewrite the banner continuously.
+    if (!boundsFailed) {
+      boundsFailed = true;
+      showError("browser_layout", e);
+    }
+  });
 }
 
 function scheduleBounds() {
@@ -261,13 +348,23 @@ function scheduleBounds() {
 }
 
 async function go() {
-  const target = els.url.value;
+  if (activeId === null) return;
+  const id = activeId;
   try {
-    const full = await invoke("browser_navigate", { url: target });
+    const full = await invoke("browser_navigate", { id, url: els.url.value });
     els.url.value = full;
+    const entry = terminals.get(id);
+    if (entry) entry.url = full;
     els.url.blur();
+    terminals.get(id)?.term.focus();
   } catch (e) {
-    console.error(e);
+    showError("browser", e);
+  }
+}
+
+function history(action) {
+  if (activeId !== null) {
+    invoke("browser_history", { id: activeId, action }).catch(console.error);
   }
 }
 
@@ -303,19 +400,17 @@ function makeSplitter(el, varName, opts) {
 // ----------------------------------------------------------------- startup
 
 async function main() {
-  els.newBtn.onclick = () => newTerminal().catch(console.error);
+  els.newBtn.onclick = () => newTerminal().catch((e) => showError("new terminal", e));
   els.closeBtn.onclick = () => activeId !== null && closeTerminal(activeId);
+  document.getElementById("err-close").onclick = () => (els.err.hidden = true);
 
-  els.url.value = "https://duckduckgo.com";
+  els.url.value = HOME_PAGE;
   els.url.addEventListener("keydown", (e) => {
     if (e.key === "Enter") go();
   });
-  document.getElementById("back-btn").onclick = () =>
-    invoke("browser_history", { action: "back" });
-  document.getElementById("fwd-btn").onclick = () =>
-    invoke("browser_history", { action: "forward" });
-  document.getElementById("reload-btn").onclick = () =>
-    invoke("browser_history", { action: "reload" });
+  document.getElementById("back-btn").onclick = () => history("back");
+  document.getElementById("fwd-btn").onclick = () => history("forward");
+  document.getElementById("reload-btn").onclick = () => history("reload");
 
   makeSplitter(document.getElementById("split-term"), "--rail-w", {
     min: 170,
@@ -347,14 +442,19 @@ async function main() {
 
   await newTerminal();
   pushBrowserBounds();
+  logInfo(`started; terminals=${terminals.size} active=${activeId}`);
 
-  // Keep the URL bar showing wherever the browser actually ended up, including
-  // after in-page navigation we did not initiate.
+  // Keep the URL bar showing wherever the active terminal's browser actually
+  // ended up, including after in-page navigation we did not initiate.
   setInterval(async () => {
-    if (document.activeElement === els.url) return;
+    if (activeId === null || document.activeElement === els.url) return;
+    const id = activeId;
     try {
-      const u = await invoke("browser_url");
-      if (u && u !== els.url.value) els.url.value = u;
+      const u = await invoke("browser_url", { id });
+      const entry = terminals.get(id);
+      if (entry) entry.url = u;
+      // Guard against the terminal having been switched mid-await.
+      if (id === activeId && u !== els.url.value) els.url.value = u;
     } catch {}
   }, 1000);
 }
@@ -363,4 +463,5 @@ main().catch((e) => {
   document.body.innerHTML =
     `<pre class="term-empty">mux failed to start:\n${e}</pre>`;
   console.error(e);
+  invoke("ui_log", { message: `failed to start: ${e}` }).catch(() => {});
 });

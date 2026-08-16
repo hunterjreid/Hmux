@@ -1,8 +1,8 @@
 // Release builds must not pop a console window behind the GUI.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! GUI front end: terminals down the left, the active one in the middle, a real
-//! browser on the right.
+//! GUI front end: terminals down the left, the active one in the middle, and
+//! that terminal's own browser on the right.
 //!
 //! The division of labour is deliberate. Rust owns the pseudoconsoles and the
 //! process table — the things only the OS can answer. The webview owns the
@@ -10,16 +10,12 @@
 //! here, because xterm.js is already a better terminal emulator than the one
 //! this project would maintain.
 //!
-//! The window holds *two* webviews, not one. The chrome (sidebar, terminal,
-//! browser toolbar) lives in the `ui` webview; the browser panel is a second,
-//! genuinely separate `browser` webview. An `<iframe>` cannot do this job —
-//! `X-Frame-Options` and CSP `frame-ancestors` mean most real sites simply
-//! refuse to load in one.
-//!
-//! The cost of that choice is that the browser webview is a native child
-//! surface: it does not flow with the DOM, so its rectangle has to be pushed
-//! over from JavaScript whenever the layout moves.
+//! The window holds several webviews: one for the chrome, and one browser per
+//! terminal. An `<iframe>` cannot do the browser's job — `X-Frame-Options` and
+//! CSP `frame-ancestors` mean most real sites refuse to load in one. See
+//! [`browser`] for what that costs.
 
+mod browser;
 mod sessions;
 
 use std::sync::Mutex;
@@ -37,7 +33,32 @@ use sessions::{SessionId, Sessions};
 /// enough to feel live, slow enough that it's invisible on a CPU graph.
 const ACTIVITY_POLL: Duration = Duration::from_millis(400);
 
-const HOME_PAGE: &str = "https://duckduckgo.com";
+/// Where problems go.
+///
+/// A GUI has nowhere to print. Release builds have no console and no devtools,
+/// so without this a failure is simply invisible — which is exactly how a
+/// terminal that never appeared went undiagnosed.
+pub fn log_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("mux.log")
+}
+
+pub fn log_error(message: &str) {
+    use std::io::Write;
+    eprintln!("mux: {message}");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path())
+    {
+        let _ = writeln!(f, "{message}");
+    }
+}
+
+/// Lets the webview put its own failures in the same log.
+#[tauri::command]
+fn ui_log(message: String) {
+    log_error(&format!("ui: {message}"));
+}
 
 #[derive(Clone, Serialize)]
 pub struct TerminalInfo {
@@ -54,16 +75,34 @@ pub struct TerminalInfo {
 #[tauri::command]
 fn create_terminal(
     state: tauri::State<'_, Mutex<Sessions>>,
+    pool: tauri::State<'_, Mutex<browser::Pool>>,
     app: tauri::AppHandle,
     shell: Option<String>,
     cols: u16,
     rows: u16,
 ) -> Result<SessionId, String> {
     let shell = shell.unwrap_or_else(|| "cmd.exe".to_string());
-    let mut sessions = state.lock().map_err(|e| e.to_string())?;
-    sessions
-        .create(&app, &shell, cols, rows)
-        .map_err(|e| format!("{e:#}"))
+
+    let id = {
+        let mut sessions = state.lock().map_err(|e| e.to_string())?;
+        sessions
+            .create(&app, &shell, cols, rows)
+            .map_err(|e| format!("{e:#}"))?
+    };
+
+    // Claim one of the browsers built at startup. Nothing is created here:
+    // making a webview once the event loop is running wedges the main thread,
+    // and this command would never return.
+    if let Ok(mut pool) = pool.lock() {
+        if pool.assign(id).is_none() {
+            log_error(&format!(
+                "terminal {id} gets no browser: all {} are in use",
+                browser::POOL_SIZE
+            ));
+        }
+    }
+
+    Ok(id)
 }
 
 #[tauri::command]
@@ -86,13 +125,35 @@ fn resize_terminal(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    state.lock().map_err(|e| e.to_string())?.resize(id, cols, rows);
+    state
+        .lock()
+        .map_err(|e| e.to_string())?
+        .resize(id, cols, rows);
     Ok(())
 }
 
 #[tauri::command]
-fn close_terminal(state: tauri::State<'_, Mutex<Sessions>>, id: SessionId) -> Result<(), String> {
+fn close_terminal(
+    state: tauri::State<'_, Mutex<Sessions>>,
+    pool: tauri::State<'_, Mutex<browser::Pool>>,
+    app: tauri::AppHandle,
+    id: SessionId,
+) -> Result<(), String> {
     state.lock().map_err(|e| e.to_string())?.close(id);
+
+    // Hand the browser back to the pool, and send it home first so the next
+    // terminal to claim this slot does not inherit the last one's page.
+    if let Ok(mut pool) = pool.lock() {
+        if let Some(slot) = pool.release(id) {
+            if let (Some(webview), Some(home)) =
+                (app.get_webview(&browser::slot_label(slot)), pool.home())
+            {
+                if let Ok(url) = home.parse::<tauri::Url>() {
+                    let _ = webview.navigate(url);
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -113,43 +174,61 @@ fn list_terminals(state: tauri::State<'_, Mutex<Sessions>>) -> Result<Vec<Termin
 
 // ---- browser panel commands ----------------------------------------------
 
-/// Position the browser webview over the region the DOM has reserved for it.
+/// Show `active`'s browser over the region the DOM reserved, and park the rest.
 ///
-/// Called by the UI on every layout change: startup, window resize, and while
-/// the splitter is being dragged.
+/// Called by the UI on every layout change: startup, terminal switch, window
+/// resize, and while the splitter is dragged.
+/// Reports whether the active terminal actually has a browser, so the UI can
+/// say so rather than showing a dead panel.
 #[tauri::command]
-fn browser_bounds(
+fn browser_layout(
     app: tauri::AppHandle,
+    pool: tauri::State<'_, Mutex<browser::Pool>>,
+    active: Option<SessionId>,
     x: f64,
     y: f64,
     width: f64,
     height: f64,
-) -> Result<(), String> {
-    let Some(browser) = app.get_webview("browser") else {
-        return Ok(());
-    };
-    // A zero or negative size is a collapsed panel; parking it off-screen is
-    // how you hide a native child surface, since it has no CSS to obey.
-    if width < 1.0 || height < 1.0 {
-        let _ = browser.set_position(LogicalPosition::new(-10_000.0, 0.0));
-        return Ok(());
-    }
-    browser
-        .set_position(LogicalPosition::new(x, y))
-        .map_err(|e| e.to_string())?;
-    browser
-        .set_size(LogicalSize::new(width, height))
-        .map_err(|e| e.to_string())
+) -> Result<bool, String> {
+    let slot = active.and_then(|id| pool.lock().ok().and_then(|p| p.slot_of(id)));
+    browser::layout(&app, slot, x, y, width, height);
+    Ok(slot.is_some())
+}
+
+/// Look up a terminal's browser, or explain why it hasn't got one.
+fn webview_for(
+    app: &tauri::AppHandle,
+    pool: &tauri::State<'_, Mutex<browser::Pool>>,
+    id: SessionId,
+) -> Result<tauri::Webview, String> {
+    let slot = pool
+        .lock()
+        .map_err(|e| e.to_string())?
+        .slot_of(id)
+        .ok_or_else(|| {
+            format!(
+                "terminal {id} has no browser (all {} are in use)",
+                browser::POOL_SIZE
+            )
+        })?;
+    app.get_webview(&browser::slot_label(slot))
+        .ok_or_else(|| format!("browser {slot} is missing"))
 }
 
 #[tauri::command]
-fn browser_navigate(app: tauri::AppHandle, url: String) -> Result<String, String> {
-    let Some(browser) = app.get_webview("browser") else {
-        return Err("browser webview is not available".into());
+fn browser_navigate(
+    app: tauri::AppHandle,
+    pool: tauri::State<'_, Mutex<browser::Pool>>,
+    id: SessionId,
+    url: String,
+) -> Result<String, String> {
+    // An empty bar is not a request to go anywhere.
+    let Some(full) = browser::normalise_url(&url) else {
+        return Ok(String::new());
     };
-    let full = normalise_url(&url);
+    let webview = webview_for(&app, &pool, id)?;
     let parsed: tauri::Url = full.parse().map_err(|_| format!("not a URL: {url}"))?;
-    browser.navigate(parsed).map_err(|e| e.to_string())?;
+    webview.navigate(parsed).map_err(|e| e.to_string())?;
     Ok(full)
 }
 
@@ -157,63 +236,44 @@ fn browser_navigate(app: tauri::AppHandle, url: String) -> Result<String, String
 /// not expose webview history directly, and `history.go` is what the buttons
 /// mean anyway.
 #[tauri::command]
-fn browser_history(app: tauri::AppHandle, action: String) -> Result<(), String> {
-    let Some(browser) = app.get_webview("browser") else {
-        return Ok(());
-    };
+fn browser_history(
+    app: tauri::AppHandle,
+    pool: tauri::State<'_, Mutex<browser::Pool>>,
+    id: SessionId,
+    action: String,
+) -> Result<(), String> {
     let script = match action.as_str() {
         "back" => "history.back()",
         "forward" => "history.forward()",
         "reload" => "location.reload()",
         other => return Err(format!("unknown history action: {other}")),
     };
-    browser.eval(script).map_err(|e| e.to_string())
+    let Ok(webview) = webview_for(&app, &pool, id) else {
+        return Ok(());
+    };
+    webview.eval(script).map_err(|e| e.to_string())
 }
 
+/// The address to show in the bar. Empty for the new-tab page, whose real
+/// address is an internal asset path nobody wants to look at.
 #[tauri::command]
-fn browser_url(app: tauri::AppHandle) -> Result<String, String> {
-    let Some(browser) = app.get_webview("browser") else {
+fn browser_url(
+    app: tauri::AppHandle,
+    pool: tauri::State<'_, Mutex<browser::Pool>>,
+    id: SessionId,
+) -> Result<String, String> {
+    let Ok(webview) = webview_for(&app, &pool, id) else {
         return Ok(String::new());
     };
-    Ok(browser.url().map(|u| u.to_string()).unwrap_or_default())
-}
-
-/// Accept what people actually type: bare hosts become https, anything with
-/// spaces or no dot becomes a search.
-fn normalise_url(input: &str) -> String {
-    let t = input.trim();
-    if t.is_empty() {
-        return HOME_PAGE.to_string();
-    }
-    if t.starts_with("http://") || t.starts_with("https://") || t.starts_with("about:") {
-        return t.to_string();
-    }
-    let looks_like_host = !t.contains(' ') && t.contains('.');
-    if looks_like_host {
-        format!("https://{t}")
-    } else {
-        format!(
-            "https://duckduckgo.com/?q={}",
-            urlencode(t)
-        )
-    }
-}
-
-fn urlencode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            b' ' => "+".to_string(),
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
+    let url = webview.url().map(|u| u.to_string()).unwrap_or_default();
+    let is_home = pool.lock().map(|p| p.is_home(&url)).unwrap_or(false);
+    Ok(if is_home { String::new() } else { url })
 }
 
 fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(Sessions::default()))
+        .manage(Mutex::new(browser::Pool::default()))
         .invoke_handler(tauri::generate_handler![
             create_terminal,
             write_terminal,
@@ -221,10 +281,11 @@ fn main() {
             close_terminal,
             terminal_backlog,
             list_terminals,
-            browser_bounds,
+            browser_layout,
             browser_navigate,
             browser_history,
             browser_url,
+            ui_log,
         ])
         .setup(|app| {
             let window = WindowBuilder::new(app, "main")
@@ -237,26 +298,33 @@ fn main() {
             let scale = window.scale_factor()?;
             let logical = size.to_logical::<f64>(scale);
 
-            // The chrome fills the window; the browser is layered over the
-            // region the chrome leaves empty for it.
+            // The chrome fills the window; browsers are layered over the region
+            // it leaves empty for them.
             window.add_child(
                 WebviewBuilder::new("ui", WebviewUrl::App("index.html".into())),
                 LogicalPosition::new(0.0, 0.0),
                 LogicalSize::new(logical.width, logical.height),
             )?;
 
-            window.add_child(
-                WebviewBuilder::new(
-                    "browser",
-                    WebviewUrl::External(HOME_PAGE.parse().expect("valid home page")),
-                ),
-                // Parked off-screen until the UI reports where it belongs.
-                LogicalPosition::new(-10_000.0, 0.0),
-                LogicalSize::new(600.0, 600.0),
-            )?;
+            // Every browser is built here, before the event loop starts.
+            // Creating one later blocks the main thread permanently, which
+            // presents as commands silently never returning.
+            browser::create_pool(&window)?;
 
-            // Keep the chrome webview matched to the window. The browser panel
-            // is repositioned by the UI, which recomputes its own layout.
+            // Ask a browser what it actually loaded, so the new-tab page's
+            // address is known rather than assumed.
+            if let Some(first) = app.get_webview(&browser::slot_label(0)) {
+                if let Ok(url) = first.url() {
+                    if let Some(pool) = app.try_state::<Mutex<browser::Pool>>() {
+                        if let Ok(mut pool) = pool.lock() {
+                            pool.set_home(url.to_string());
+                        }
+                    }
+                }
+            }
+
+            // Keep the chrome webview matched to the window. Browsers are
+            // repositioned by the UI, which recomputes its own layout.
             let resize_handle = window.clone();
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::Resized(new_size) = event {
@@ -309,31 +377,4 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running mux");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::normalise_url;
-
-    #[test]
-    fn bare_hosts_get_https() {
-        assert_eq!(normalise_url("example.com"), "https://example.com");
-        assert_eq!(normalise_url("  news.ycombinator.com "), "https://news.ycombinator.com");
-    }
-
-    #[test]
-    fn explicit_schemes_are_left_alone() {
-        assert_eq!(normalise_url("http://a.test/x"), "http://a.test/x");
-        assert_eq!(normalise_url("https://a.test"), "https://a.test");
-    }
-
-    #[test]
-    fn prose_becomes_a_search() {
-        assert_eq!(
-            normalise_url("rust conpty"),
-            "https://duckduckgo.com/?q=rust+conpty"
-        );
-        // No dot, so it cannot be a host.
-        assert!(normalise_url("localhost").starts_with("https://duckduckgo.com/?q="));
-    }
 }

@@ -1,7 +1,46 @@
 # mux
 
-A terminal multiplexer for Windows. A rail of buttons down the left, one
-terminal filling the rest of the screen. Click a button, get that terminal.
+Terminals that keep running whether or not you're looking at them, in two front
+ends: a GUI app, and a console-only version.
+
+## The GUI — `cargo run --release -p mux-gui`
+
+Thick buttons down the left with a live idle/busy light, the active terminal in
+the middle, and **that terminal's own browser** on the right.
+
+```
+┌────────────┬──────────────────────┬──────────────────┐
+│ TERMINALS  │ cmd 1   running ping │ ‹ › ⟳  address   │
+│ ● cmd 1    │ Reply from 127.0.0.1 ├──────────────────┤
+│   ping     │ Reply from 127.0.0.1 │                  │
+│ ○ cmd 2    │                      │   its own page   │
+│   idle     │                      │                  │
+│  + new     │                      │                  │
+└────────────┴──────────────────────┴──────────────────┘
+```
+
+Each terminal owns a browser, so switching terminals switches the page —
+scroll position, forms and logins all still there, because it is a separate
+webview rather than one that re-navigates.
+
+**Idle or busy is asked of the OS, not guessed from output.** A shell sitting at
+a prompt has no child processes; a shell running `ping` has `ping.exe` under it.
+So a compile that has been silent for a minute still reads as busy, which the
+usual "did it print recently" heuristic gets wrong. It walks to the deepest
+descendant, so `cargo` spawning `rustc` reads as `rustc`.
+
+Colours are the Windows console's own Campbell palette, with the 256-colour cube
+and 24-bit truecolor passed through untouched.
+
+Problems go to `%TEMP%\mux.log` and to a banner in the window. A GUI has nowhere
+to print, and a silent failure is how a bug here stays invisible.
+
+---
+
+## The console version — `cargo run --release --bin mux`
+
+A rail of buttons down the left, one terminal filling the rest of the screen.
+Click a button, get that terminal.
 
 ```
 ┌────────────┬──────────────────────────────┐
@@ -92,13 +131,28 @@ Two things that are easy to get wrong and are handled:
 - Combining characters are dropped rather than composed onto the previous cell.
 - No bracketed paste, no mouse forwarding to child programs, no sixel.
 
+## Two things that will bite you here
+
+Recording these because both cost real time and neither is obvious.
+
+**A raw byte reader is not a terminal.** `cmd.exe` opens by sending `\x1b[6n`
+(report cursor position) and then *blocks until something answers*. A plain
+byte sink deadlocks after exactly four bytes. The console front end answers from
+`Grid`; the GUI relies on xterm.js answering.
+
+**A WebView2 can only be created before the event loop runs.** Creating one from
+a command handler wedges the main thread permanently — every later command stops
+being answered, which looks like the app going quiet rather than like an error.
+That's why browsers come from a pool built during `setup` and handed out
+afterwards, and why there is a ceiling on how many terminals get one.
+
 ## Tests
 
 ```
-cargo test
+cargo test --workspace
 ```
 
-31 tests. The unit tests feed bytes to the emulator directly; `tests/pty_smoke.rs`
+52 tests. The unit tests feed bytes to the emulator directly; `tests/pty_smoke.rs`
 spawns real `cmd.exe` processes through ConPTY and checks that commands execute,
 that an unattended pane keeps making progress, that resize reaches the child,
 that a dead shell is noticed, and that a composed frame actually contains the

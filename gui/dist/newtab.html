@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>New tab</title>
+    <style>
+      /* Loaded into a browser webview with no access to the app's API, so this
+         page is entirely self-contained: plain HTML, CSS and a form. */
+      :root {
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0f1115;
+        color: #d6dae1;
+        font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+      }
+      main {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 26px;
+        padding: 24px;
+      }
+      .mark {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 26px;
+        font-weight: 650;
+        letter-spacing: -0.01em;
+        color: #eef1f5;
+      }
+      .mark .caret {
+        color: #3fd07f;
+        font-family: "Cascadia Mono", Consolas, monospace;
+      }
+      form {
+        width: min(620px, 100%);
+        display: flex;
+        gap: 8px;
+      }
+      input {
+        flex: 1;
+        min-width: 0;
+        height: 46px;
+        padding: 0 18px;
+        border-radius: 23px;
+        border: 1px solid #2a3038;
+        background: #171a20;
+        color: inherit;
+        font: inherit;
+        font-size: 15px;
+        outline: none;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      input::placeholder {
+        color: #6d7681;
+      }
+      input:focus {
+        border-color: #4a9eff;
+        background: #1b1f26;
+      }
+      button {
+        height: 46px;
+        padding: 0 22px;
+        border-radius: 23px;
+        border: none;
+        background: #4a9eff;
+        color: #06101d;
+        font: inherit;
+        font-weight: 650;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #63acff;
+      }
+      .links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: center;
+        width: min(620px, 100%);
+      }
+      .links a {
+        padding: 8px 14px;
+        border: 1px solid #262b33;
+        border-radius: 999px;
+        background: #14171d;
+        color: #9aa3ae;
+        text-decoration: none;
+        font-size: 12.5px;
+        transition: color 0.15s, border-color 0.15s, background 0.15s;
+      }
+      .links a:hover {
+        color: #eef1f5;
+        border-color: #3a424d;
+        background: #1a1e25;
+      }
+      .hint {
+        color: #5d656f;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark"><span class="caret">&gt;_</span> mux</div>
+
+      <!-- No JS needed: the form GETs straight to the search engine. -->
+      <form action="https://duckduckgo.com/" method="GET">
+        <input
+          name="q"
+          type="text"
+          autofocus
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="Search the web"
+        />
+        <button type="submit">Search</button>
+      </form>
+
+      <nav class="links">
+        <a href="https://github.com">GitHub</a>
+        <a href="https://docs.rs">docs.rs</a>
+        <a href="https://crates.io">crates.io</a>
+        <a href="https://developer.mozilla.org">MDN</a>
+        <a href="https://news.ycombinator.com">Hacker News</a>
+        <a href="https://stackoverflow.com">Stack Overflow</a>
+      </nav>
+
+      <p class="hint">This browser belongs to the selected terminal.</p>
+    </main>
+  </body>
+</html>
