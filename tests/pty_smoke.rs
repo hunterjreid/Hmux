@@ -9,6 +9,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use mux::activity::{Activity, ProcessTable};
+use mux::grid::Color;
 use mux::pane::Pane;
 
 /// Poll the pane's grid until `needle` shows up, or give up.
@@ -182,6 +183,47 @@ fn a_running_command_flips_the_terminal_to_busy_and_back() {
     assert!(
         wait_for_activity(&pane, false, Duration::from_secs(30)).is_some(),
         "the terminal stayed busy after its command finished"
+    );
+}
+
+#[test]
+fn colour_survives_the_whole_pipeline() {
+    // "The terminal has no colours" needs an answer that isn't a screenshot.
+    // This drives a real shell, asks it for red text, and checks the cell that
+    // came out the far end is actually red — proving ConPTY advertises colour
+    // support, the program emits SGR, and the emulator keeps it.
+    let (tx, _rx) = mpsc::channel();
+    let pane = Pane::spawn(1, "ps", "powershell.exe", 100, 30, tx)
+        .expect("failed to open a ConPTY");
+
+    assert!(
+        wait_for(&pane, ">", Duration::from_secs(30)).is_some(),
+        "powershell never produced a prompt"
+    );
+
+    pane.write_input(b"Write-Host -ForegroundColor Red 'REDTEXT'\r\n");
+    assert!(
+        wait_for(&pane, "REDTEXT", Duration::from_secs(30)).is_some(),
+        "the command never produced output"
+    );
+
+    // The echoed command line contains REDTEXT too, in the default colour, so
+    // look for any occurrence that carries a colour.
+    let grid = pane.grid.lock().unwrap();
+    let mut coloured = None;
+    for r in 0..grid.rows {
+        let row = grid.row(r);
+        for c in 0..grid.cols.saturating_sub(3) {
+            let is_marker = row[c].ch == 'R' && row[c + 1].ch == 'E' && row[c + 2].ch == 'D';
+            if is_marker && row[c].fg != Color::Default {
+                coloured = Some(row[c].fg);
+            }
+        }
+    }
+
+    assert!(
+        coloured.is_some(),
+        "REDTEXT reached the grid with no colour at all — the pipeline is dropping SGR"
     );
 }
 

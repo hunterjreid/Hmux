@@ -41,6 +41,18 @@ body {
   height: 100vh;
 }
 
+/* Closed is the default. The browser column collapses to nothing, taking its
+   splitter with it, and the native webview is parked off-screen — CSS cannot
+   hide it, so width 0 is the signal to move it away. */
+.app.browser-closed {
+  grid-template-columns: var(--rail-w) 4px 1fr 0 0;
+}
+
+.app.browser-closed .browser-panel,
+.app.browser-closed #split-browser {
+  display: none;
+}
+
 /* ---------- splitters ---------- */
 
 .split {
@@ -99,7 +111,7 @@ body {
 /* The thick buttons. */
 .term-btn {
   display: grid;
-  grid-template-columns: 22px 1fr;
+  grid-template-columns: 22px 1fr auto;
   grid-template-rows: auto auto;
   align-items: center;
   gap: 0 10px;
@@ -156,6 +168,35 @@ body {
   grid-row: 1 / span 2;
 }
 
+/* Output that arrived while you were looking at a different terminal. Clears
+   the moment you open it. */
+.term-btn .unread {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  min-width: 20px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #06101d;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.term-btn.active .unread {
+  display: none;
+}
+
+/* A terminal with a browser open gets a marker, so the rail says which ones
+   have one waiting without you having to switch to find out. */
+.term-btn .marks {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* Status light: grey idle, pulsing green while a command runs, red when dead. */
 .dot {
   width: 10px;
@@ -185,8 +226,16 @@ body {
   }
 }
 
-.new-btn {
+.new-row {
+  position: relative;
+  display: flex;
+  gap: 6px;
   margin: 10px;
+}
+
+.new-btn {
+  flex: 1;
+  min-width: 0;
   padding: 12px;
   display: flex;
   align-items: center;
@@ -202,10 +251,57 @@ body {
   transition: color 0.12s, border-color 0.12s, background 0.12s;
 }
 
-.new-btn:hover {
+.new-btn:hover,
+.new-menu-btn:hover {
   color: var(--busy);
   border-color: var(--busy);
   background: rgba(63, 208, 127, 0.06);
+}
+
+.new-menu-btn {
+  width: 34px;
+  flex: none;
+  border: 1px dashed #39414d;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+
+.menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #1d2128;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+
+.menu[hidden] {
+  display: none;
+}
+
+.menu button {
+  display: block;
+  width: 100%;
+  padding: 9px 11px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.menu button:hover {
+  background: var(--accent-dim);
 }
 
 .new-plus {
@@ -263,6 +359,11 @@ body {
 .icon-btn:hover {
   background: #262b33;
   color: var(--text);
+}
+
+.icon-btn.on {
+  background: var(--accent-dim);
+  color: #cfe4ff;
 }
 
 .term-host {

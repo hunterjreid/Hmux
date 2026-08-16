@@ -18,10 +18,14 @@
 
         <div class="rail-list" id="list"></div>
 
-        <button class="new-btn" id="new-btn">
-          <span class="new-plus">+</span>
-          <span>New terminal</span>
-        </button>
+        <div class="new-row">
+          <button class="new-btn" id="new-btn">
+            <span class="new-plus">+</span>
+            <span id="new-label">New terminal</span>
+          </button>
+          <button class="new-menu-btn" id="shell-btn" title="Choose a shell">⌄</button>
+          <div class="menu" id="shell-menu" hidden></div>
+        </div>
       </aside>
 
       <div class="split" id="split-term"></div>
@@ -33,6 +37,11 @@
           <span class="panel-title" id="active-title">no terminal</span>
           <span class="panel-status" id="active-status"></span>
           <span class="spacer"></span>
+          <!-- The browser starts closed; each terminal remembers whether it
+               had one open. -->
+          <button class="icon-btn" id="browser-btn" title="Toggle this terminal's browser">
+            ◧
+          </button>
           <button class="icon-btn" id="close-btn" title="Close this terminal">✕</button>
         </header>
         <div class="term-host" id="term-host"></div>

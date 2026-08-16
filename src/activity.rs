@@ -118,7 +118,7 @@ impl ProcessTable {
         }
     }
 
-    /// Walk down the process tree, following the first child at each level.
+    /// Walk down the process tree, following the first real child at each level.
     ///
     /// Depth-first to the bottom rather than just naming the direct child,
     /// because the direct child is often a wrapper — the interesting name is
@@ -128,22 +128,35 @@ impl ProcessTable {
         let mut found: Option<String> = None;
         // Bounded: a pathological or cyclic table must not spin forever.
         for _ in 0..16 {
-            match self
+            // Every console shell has a conhost hanging off it. Following that
+            // makes a terminal running `claude` report "running conhost", which
+            // is the plumbing rather than the answer.
+            let next = self
                 .entries
                 .iter()
-                .find(|e| e.parent == current && e.pid != current)
-            {
+                .filter(|e| e.parent == current && e.pid != current)
+                .find(|e| !is_infrastructure(&e.name));
+
+            match next {
                 Some(child) => {
                     found = Some(child.name.clone());
                     current = child.pid;
                 }
-                // Stop at the leaf, keeping the deepest name found so far —
-                // `?` here would throw away a perfectly good direct child.
+                // Only plumbing below, so stop and keep the deepest real name
+                // found so far — `?` here would throw away a good direct child.
                 None => break,
             }
         }
         found
     }
+}
+
+/// Console plumbing that Windows attaches to shells. Present in every process
+/// tree, never what the user is actually running.
+fn is_infrastructure(name: &str) -> bool {
+    const PLUMBING: &[&str] = &["conhost.exe", "openconsole.exe"];
+    let lower = name.to_ascii_lowercase();
+    PLUMBING.contains(&lower.as_str())
 }
 
 fn strip_exe(name: &str) -> String {
@@ -218,6 +231,44 @@ mod tests {
         assert_eq!(strip_exe("ping.exe"), "ping");
         assert_eq!(strip_exe("node"), "node");
         assert_eq!(strip_exe("cargo.EXE"), "cargo");
+    }
+
+    #[test]
+    fn console_plumbing_is_not_mistaken_for_a_command() {
+        assert!(is_infrastructure("conhost.exe"));
+        assert!(is_infrastructure("OpenConsole.exe"));
+        assert!(is_infrastructure("CONHOST.EXE"));
+        assert!(!is_infrastructure("node.exe"));
+        assert!(!is_infrastructure("cargo.exe"));
+    }
+
+    #[test]
+    fn a_shell_with_only_a_conhost_child_still_reads_as_idle() {
+        // Every console shell has a conhost attached. Counting it as a running
+        // command would make every terminal permanently busy.
+        let table = ProcessTable {
+            entries: vec![
+                Entry { pid: 100, parent: 1, name: "powershell.exe".into() },
+                Entry { pid: 101, parent: 100, name: "conhost.exe".into() },
+            ],
+        };
+        assert_eq!(table.activity_of(Some(100), true), Activity::Idle);
+    }
+
+    #[test]
+    fn a_real_command_is_preferred_over_plumbing() {
+        let table = ProcessTable {
+            entries: vec![
+                Entry { pid: 100, parent: 1, name: "powershell.exe".into() },
+                // conhost comes first, exactly as it does in the real table.
+                Entry { pid: 101, parent: 100, name: "conhost.exe".into() },
+                Entry { pid: 102, parent: 100, name: "node.exe".into() },
+            ],
+        };
+        assert_eq!(
+            table.activity_of(Some(100), true),
+            Activity::Busy { command: "node".into() }
+        );
     }
 
     #[test]

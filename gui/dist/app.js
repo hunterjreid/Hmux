@@ -26,7 +26,16 @@ const els = {
   url: document.getElementById("url"),
   err: document.getElementById("err"),
   errText: document.getElementById("err-text"),
+  app: document.querySelector(".app"),
+  browserBtn: document.getElementById("browser-btn"),
+  shellBtn: document.getElementById("shell-btn"),
+  shellMenu: document.getElementById("shell-menu"),
+  newLabel: document.getElementById("new-label"),
 };
+
+/** Shell used for new terminals; the first one Rust offers is the default. */
+let shells = [];
+let chosenShell = null;
 
 /** Surface a failure instead of swallowing it into the console. */
 function showError(where, e) {
@@ -142,6 +151,11 @@ function makeTerminal(id) {
     // Each terminal owns a browser; remembering the address here means the bar
     // shows the right thing the instant you switch, without waiting on a poll.
     url: HOME_PAGE,
+    // Closed by default. Opening one is a per-terminal decision, so coming
+    // back to a terminal restores whatever you had beside it.
+    browserOpen: false,
+    // Lines that arrived while this terminal was not the one on screen.
+    unread: 0,
   };
   terminals.set(id, entry);
 
@@ -174,6 +188,28 @@ function applyChunk({ id, data, seq }) {
   if (seq <= entry.lastSeq) return; // already covered by the replay
   entry.lastSeq = seq;
   entry.term.write(data);
+
+  // Count new lines only for terminals you are not looking at, so the rail can
+  // say "something happened over here" without you having to go and check.
+  if (id !== activeId) {
+    const lines = (data.match(/\n/g) || []).length;
+    if (lines > 0) {
+      entry.unread += lines;
+      scheduleButtons();
+    }
+  }
+}
+
+// Output can arrive hundreds of times a second; rebuilding the rail on each
+// chunk would be the most expensive thing the app does.
+let buttonsQueued = false;
+function scheduleButtons() {
+  if (buttonsQueued) return;
+  buttonsQueued = true;
+  requestAnimationFrame(() => {
+    buttonsQueued = false;
+    renderButtons();
+  });
 }
 
 /** Resize the pty to match what xterm.js just laid out. */
@@ -204,19 +240,45 @@ async function selectTerminal(id) {
   // output since it was created, whether or not it was on screen. Showing it
   // is purely a visibility change.
   const entry = terminals.get(id);
+  entry.unread = 0;
+
+  // Restore whatever this terminal had beside it, then bring its own browser
+  // forward and park the others.
+  els.url.value = entry.url;
+  applyBrowserVisibility();
+
   syncSize(id);
   entry.term.focus();
   renderButtons();
-
-  // Bring this terminal's own browser forward and park the others.
-  els.url.value = entry.url;
-  pushBrowserBounds();
 }
 
-async function newTerminal() {
+/** Show or hide the browser column according to the active terminal. */
+function applyBrowserVisibility() {
+  const entry = activeId === null ? null : terminals.get(activeId);
+  const open = !!entry && entry.browserOpen;
+
+  els.app.classList.toggle("browser-closed", !open);
+  els.browserBtn.classList.toggle("on", open);
+
+  // Layout has to settle before the slot's rectangle is worth measuring.
+  requestAnimationFrame(() => {
+    pushBrowserBounds();
+    if (activeId !== null) syncSize(activeId);
+  });
+}
+
+function toggleBrowser() {
+  if (activeId === null) return;
+  const entry = terminals.get(activeId);
+  entry.browserOpen = !entry.browserOpen;
+  applyBrowserVisibility();
+  renderButtons();
+}
+
+async function newTerminal(shell = chosenShell) {
   // 80x24 is a placeholder; the real size is sent by syncSize once laid out.
   const id = await withTimeout(
-    invoke("create_terminal", { shell: null, cols: 80, rows: 24 }),
+    invoke("create_terminal", { shell, cols: 80, rows: 24 }),
     10000,
     "create_terminal"
   );
@@ -278,6 +340,24 @@ function renderButtons() {
     status.textContent = info.busy ? `running ${info.status}` : info.status;
 
     btn.append(dot, name, status);
+
+    // Unread wins over the browser marker: new output is the more urgent thing
+    // to report, and both occupy the same corner.
+    const entry = terminals.get(info.id);
+    if (entry && entry.unread > 0 && info.id !== activeId) {
+      const badge = document.createElement("span");
+      badge.className = "unread";
+      badge.textContent = entry.unread > 99 ? "99+" : String(entry.unread);
+      badge.title = `${entry.unread} new lines`;
+      btn.appendChild(badge);
+    } else if (entry && entry.browserOpen) {
+      const marks = document.createElement("span");
+      marks.className = "marks";
+      marks.textContent = "◧";
+      marks.title = "has a browser open";
+      btn.appendChild(marks);
+    }
+
     els.list.appendChild(btn);
   }
 
@@ -399,10 +479,46 @@ function makeSplitter(el, varName, opts) {
 
 // ----------------------------------------------------------------- startup
 
+/** Populate the shell picker and pick a sensible default. */
+async function loadShells() {
+  try {
+    shells = await invoke("list_shells");
+  } catch (e) {
+    showError("list_shells", e);
+    shells = [];
+  }
+  if (shells.length) {
+    chosenShell = shells[0].program;
+    els.newLabel.textContent = `New ${shells[0].name}`;
+  }
+
+  els.shellMenu.innerHTML = "";
+  for (const shell of shells) {
+    const item = document.createElement("button");
+    item.textContent = shell.name;
+    item.onclick = () => {
+      chosenShell = shell.program;
+      els.newLabel.textContent = `New ${shell.name}`;
+      els.shellMenu.hidden = true;
+      newTerminal(shell.program).catch((e) => showError("new terminal", e));
+    };
+    els.shellMenu.appendChild(item);
+  }
+}
+
 async function main() {
   els.newBtn.onclick = () => newTerminal().catch((e) => showError("new terminal", e));
   els.closeBtn.onclick = () => activeId !== null && closeTerminal(activeId);
+  els.browserBtn.onclick = toggleBrowser;
   document.getElementById("err-close").onclick = () => (els.err.hidden = true);
+
+  els.shellBtn.onclick = (e) => {
+    e.stopPropagation();
+    els.shellMenu.hidden = !els.shellMenu.hidden;
+  };
+  document.addEventListener("click", () => (els.shellMenu.hidden = true));
+
+  await loadShells();
 
   els.url.value = HOME_PAGE;
   els.url.addEventListener("keydown", (e) => {
@@ -441,8 +557,11 @@ async function main() {
   });
 
   await newTerminal();
-  pushBrowserBounds();
-  logInfo(`started; terminals=${terminals.size} active=${activeId}`);
+  // Starts closed; the toggle in the terminal header opens it per terminal.
+  applyBrowserVisibility();
+  logInfo(
+    `started; terminals=${terminals.size} active=${activeId} shell=${chosenShell}`
+  );
 
   // Keep the URL bar showing wherever the active terminal's browser actually
   // ended up, including after in-page navigation we did not initiate.

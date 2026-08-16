@@ -17,6 +17,7 @@
 
 mod browser;
 mod sessions;
+mod shells;
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -81,7 +82,8 @@ fn create_terminal(
     cols: u16,
     rows: u16,
 ) -> Result<SessionId, String> {
-    let shell = shell.unwrap_or_else(|| "cmd.exe".to_string());
+    // Defaults to the most colourful shell present, not cmd.exe.
+    let shell = shell.unwrap_or_else(shells::default_program);
 
     let id = {
         let mut sessions = state.lock().map_err(|e| e.to_string())?;
@@ -170,6 +172,11 @@ fn terminal_backlog(
 #[tauri::command]
 fn list_terminals(state: tauri::State<'_, Mutex<Sessions>>) -> Result<Vec<TerminalInfo>, String> {
     Ok(state.lock().map_err(|e| e.to_string())?.info())
+}
+
+#[tauri::command]
+fn list_shells() -> Vec<shells::Shell> {
+    shells::available()
 }
 
 // ---- browser panel commands ----------------------------------------------
@@ -281,6 +288,7 @@ fn main() {
             close_terminal,
             terminal_backlog,
             list_terminals,
+            list_shells,
             browser_layout,
             browser_navigate,
             browser_history,
