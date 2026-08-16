@@ -1,0 +1,105 @@
+# Publish a release when a version tag is pushed.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Produces four assets. The two bare executables are what install.ps1 fetches;
+# the installers are for people who would rather click something.
+#
+#   mux-gui.exe              the window
+#   mux.exe                  the console version
+#   mux-setup-<version>.exe  NSIS installer
+#   mux-<version>.msi        MSI, for anyone deploying it centrally
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # So a failed release can be retried without moving the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Work out the version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag }}"
+          if (-not $tag) { $tag = "${{ github.ref_name }}" }
+          "tag=$tag"                        >> $env:GITHUB_OUTPUT
+          "version=$($tag -replace '^v','')" >> $env:GITHUB_OUTPUT
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      # The console front end. `tauri build` only knows about the GUI.
+      - name: Build the console version
+        run: cargo build --release --bin mux
+
+      # A prebuilt CLI. Building tauri-cli from source here costs more than
+      # the rest of this workflow put together.
+      - name: Build the window and its installers
+        working-directory: gui/src-tauri
+        run: npx --yes @tauri-apps/cli@^2 build
+
+      - name: Collect the assets
+        id: collect
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $out = "release-assets"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+          Copy-Item target/release/mux-gui.exe $out -ErrorAction Stop
+          Copy-Item target/release/mux.exe     $out -ErrorAction Stop
+
+          # Tauri names these itself and the pattern has changed between
+          # versions, so find them rather than assuming.
+          $nsis = Get-ChildItem target/release/bundle/nsis/*.exe -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+          if ($nsis) { Copy-Item $nsis.FullName (Join-Path $out "mux-setup-$version.exe") }
+          else { Write-Host "::warning::no NSIS installer was produced" }
+
+          $msi = Get-ChildItem target/release/bundle/msi/*.msi -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if ($msi) { Copy-Item $msi.FullName (Join-Path $out "mux-$version.msi") }
+          else { Write-Host "::warning::no MSI was produced" }
+
+          Get-ChildItem $out | ForEach-Object {
+            "{0,-32} {1,10:N0} bytes" -f $_.Name, $_.Length
+          }
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          $assets = (Get-ChildItem release-assets).FullName
+
+          # Re-running the workflow for a tag that already has a release should
+          # replace its files rather than fall over.
+          $exists = gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber
+          } else {
+            gh release create $tag @assets --title "mux $tag" --generate-notes
+          }
