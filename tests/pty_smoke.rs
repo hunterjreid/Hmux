@@ -1,0 +1,158 @@
+//! End-to-end checks against a real ConPTY and a real `cmd.exe`.
+//!
+//! The unit tests cover the emulator by feeding it bytes directly, which proves
+//! nothing about whether we can actually talk to Windows. These spawn the shell
+//! for real: they are the tests that fail when ConPTY, the reader thread, or
+//! the input path is wired up wrong.
+
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+use mux::pane::Pane;
+
+/// Poll the pane's grid until `needle` shows up, or give up.
+fn wait_for(pane: &Pane, needle: &str, timeout: Duration) -> Option<String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let screen = {
+            let g = pane.grid.lock().unwrap();
+            (0..g.rows)
+                .map(|r| g.row(r).iter().map(|c| c.ch).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        if screen.contains(needle) {
+            return Some(screen);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn spawns_a_shell_and_runs_a_command() {
+    let (tx, _rx) = mpsc::channel();
+    let pane = Pane::spawn(1, "cmd", "cmd.exe", 80, 24, tx).expect("failed to open a ConPTY");
+
+    assert!(pane.is_alive());
+
+    // Wait for the shell to be ready before typing at it.
+    assert!(
+        wait_for(&pane, ">", Duration::from_secs(15)).is_some(),
+        "cmd.exe never produced a prompt"
+    );
+
+    // `21*2` proves the child actually executed: the echoed command line
+    // contains "21*2", but only real output contains "42".
+    pane.write_input(b"set /a 21*2\r\n");
+
+    let screen = wait_for(&pane, "42", Duration::from_secs(15))
+        .expect("command output never appeared in the grid");
+
+    assert!(screen.contains("42"), "screen was:\n{screen}");
+}
+
+#[test]
+fn a_hidden_pane_keeps_running() {
+    // The whole point of the sidebar: panes are not ephemeral. Nothing here
+    // ever "focuses" the pane — it is never rendered, never read from by a UI —
+    // and it still has to make progress.
+    let (tx, _rx) = mpsc::channel();
+    let pane = Pane::spawn(1, "cmd", "cmd.exe", 80, 24, tx).expect("failed to open a ConPTY");
+
+    assert!(wait_for(&pane, ">", Duration::from_secs(15)).is_some());
+
+    pane.write_input(b"echo still-alive-marker\r\n");
+    assert!(
+        wait_for(&pane, "still-alive-marker", Duration::from_secs(15)).is_some(),
+        "an unattended pane stopped making progress"
+    );
+}
+
+#[test]
+fn resize_reaches_the_child() {
+    let (tx, _rx) = mpsc::channel();
+    let pane = Pane::spawn(1, "cmd", "cmd.exe", 80, 24, tx).expect("failed to open a ConPTY");
+    assert!(wait_for(&pane, ">", Duration::from_secs(15)).is_some());
+
+    pane.resize(100, 30);
+
+    let g = pane.grid.lock().unwrap();
+    assert_eq!(g.cols, 100);
+    assert_eq!(g.rows, 30);
+}
+
+#[test]
+fn the_composed_frame_has_a_rail_a_divider_and_live_output() {
+    let (tx, _rx) = mpsc::channel();
+    let a = Pane::spawn(1, "cmd", "cmd.exe", 60, 20, tx.clone()).expect("pane 1");
+    let b = Pane::spawn(2, "cmd", "cmd.exe", 60, 20, tx).expect("pane 2");
+
+    assert!(wait_for(&a, ">", Duration::from_secs(15)).is_some());
+    a.write_input(b"set /a 21*2\r\n");
+    assert!(wait_for(&a, "42", Duration::from_secs(15)).is_some());
+
+    let (cols, rows) = (80u16, 24u16);
+    let l = mux::layout::compute(cols, rows, 20);
+    let panes = vec![a, b];
+    let frame = mux::render::compose(&panes, 0, &l, cols, rows, false);
+
+    let row = |y: u16| -> String {
+        (0..cols)
+            .map(|x| frame.cells[y as usize * cols as usize + x as usize].ch)
+            .collect()
+    };
+
+    assert!(row(0).starts_with(" TERMINALS"), "rail heading missing: {:?}", row(0));
+
+    // Pane 1 is active and marked; pane 2 is listed but unmarked.
+    let first = row(l.button_row(0));
+    let second = row(l.button_row(1));
+    assert!(first.contains('▸'), "active marker missing: {first:?}");
+    assert!(first.contains("1:"), "first button missing: {first:?}");
+    assert!(second.contains("2:"), "second button missing: {second:?}");
+    assert!(!second.trim_start().starts_with('▸'), "inactive pane marked: {second:?}");
+
+    // The vertical rule separates rail from terminal on every body row.
+    for y in 0..l.sidebar.h {
+        let c = frame.cells[y as usize * cols as usize + l.divider_x as usize].ch;
+        assert_eq!(c, '│', "divider broken at row {y}");
+    }
+
+    // The active pane's output is actually painted into the content area.
+    let content: String = (0..l.content.h).map(row).collect::<Vec<_>>().join("\n");
+    assert!(content.contains("42"), "live output not composed:\n{content}");
+
+    // And the status line reports both panes.
+    assert!(row(l.status.y).contains("2/2 live"), "status wrong: {:?}", row(l.status.y));
+}
+
+#[test]
+fn pane_reports_death_after_exit() {
+    let (tx, rx) = mpsc::channel();
+    let pane = Pane::spawn(7, "cmd", "cmd.exe", 80, 24, tx).expect("failed to open a ConPTY");
+    assert!(wait_for(&pane, ">", Duration::from_secs(15)).is_some());
+
+    pane.write_input(b"exit\r\n");
+
+    // Drain events until the exit notice arrives; output events precede it.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut saw_exit = false;
+    while Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(mux::Ev::Exited(id)) => {
+                assert_eq!(id, 7);
+                saw_exit = true;
+                break;
+            }
+            Ok(_) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    assert!(saw_exit, "pane never reported that its shell exited");
+    assert!(!pane.is_alive());
+}

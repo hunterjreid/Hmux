@@ -1,0 +1,11 @@
+[package]
+name = "mux"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+portable-pty = "0.9.0"
+unicode-width = "0.2.2"
+vte = "0.15.0"
+windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_Foundation", "Win32_Storage_FileSystem"] }
