@@ -8,10 +8,12 @@
 //!   [`render`] — compose a frame, diff it, emit the difference
 //!   [`input`]  — prefix chords and mouse clicks vs. everything else
 
+pub mod activity;
 pub mod grid;
 pub mod input;
 pub mod layout;
 pub mod pane;
+pub mod pty;
 pub mod render;
 pub mod term;
 

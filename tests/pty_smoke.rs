@@ -8,6 +8,7 @@
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use mux::activity::{Activity, ProcessTable};
 use mux::pane::Pane;
 
 /// Poll the pane's grid until `needle` shows up, or give up.
@@ -127,6 +128,61 @@ fn the_composed_frame_has_a_rail_a_divider_and_live_output() {
 
     // And the status line reports both panes.
     assert!(row(l.status.y).contains("2/2 live"), "status wrong: {:?}", row(l.status.y));
+}
+
+/// Poll the process table until a pane reaches the wanted state.
+fn wait_for_activity(pane: &Pane, want_busy: bool, timeout: Duration) -> Option<Activity> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let activity = pane.activity(&ProcessTable::capture());
+        if activity.is_busy() == want_busy {
+            return Some(activity);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+#[test]
+fn a_running_command_flips_the_terminal_to_busy_and_back() {
+    // This is exactly what drives the sidebar's idle/busy badge, tested without
+    // a window: spawn a shell, run something slow, watch the state change.
+    // Via `Pane` rather than a bare `PtyProcess`, because a raw reader is not
+    // a terminal: cmd.exe opens by asking `\x1b[6n` (report cursor position)
+    // and blocks until something answers. Pane's Grid answers; a plain byte
+    // sink deadlocks after exactly four bytes.
+    let (tx, _rx) = mpsc::channel();
+    let pane = Pane::spawn(1, "cmd", "cmd.exe", 80, 24, tx).expect("failed to open a ConPTY");
+
+    assert!(
+        wait_for(&pane, ">", Duration::from_secs(15)).is_some(),
+        "cmd.exe never produced a prompt"
+    );
+
+    // A shell sitting at its prompt has no children.
+    assert!(
+        wait_for_activity(&pane, false, Duration::from_secs(10)).is_some(),
+        "a fresh shell never settled to idle"
+    );
+
+    pane.write_input(b"ping -n 6 127.0.0.1\r\n");
+
+    let busy = wait_for_activity(&pane, true, Duration::from_secs(15))
+        .expect("a running command never registered as busy");
+    match &busy {
+        Activity::Busy { command } => {
+            assert_eq!(command, "ping", "busy, but reported `{command}`");
+        }
+        other => panic!("expected Busy, got {other:?}"),
+    }
+
+    // And back again once it finishes — a badge that latches on is useless.
+    assert!(
+        wait_for_activity(&pane, false, Duration::from_secs(30)).is_some(),
+        "the terminal stayed busy after its command finished"
+    );
 }
 
 #[test]

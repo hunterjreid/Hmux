@@ -7,15 +7,14 @@
 //! shows the real current screen because the grid never stopped being updated.
 
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use anyhow::Result;
 use vte::Parser;
 
 use crate::grid::Grid;
+use crate::pty::PtyProcess;
 use crate::Ev;
 
 pub struct Pane {
@@ -24,14 +23,7 @@ pub struct Pane {
     /// OSC title sequence, which we surface on the button.
     pub label: String,
     pub grid: Arc<Mutex<Grid>>,
-    pub alive: Arc<AtomicBool>,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    master: Box<dyn MasterPty + Send>,
-    /// Shared with the waiter thread. On Unix the reader hitting EOF would be
-    /// enough to know the child is gone; ConPTY keeps its output pipe open
-    /// until the pseudoconsole is closed, so the process has to be watched
-    /// directly or an exited shell looks alive forever.
-    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+    proc: PtyProcess,
 }
 
 impl Pane {
@@ -46,61 +38,31 @@ impl Pane {
         let cols = cols.max(1);
         let rows = rows.max(1);
 
-        let pty = native_pty_system();
-        let pair = pty
-            .openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .context("failed to open a ConPTY — needs Windows 10 1809 or newer")?;
-
-        let mut cmd = CommandBuilder::new(program);
-        if let Ok(cwd) = std::env::current_dir() {
-            cmd.cwd(cwd);
-        }
-        // Advertise a terminal type; some tools consult it before emitting colour.
-        cmd.env("TERM", "xterm-256color");
-
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .with_context(|| format!("failed to start {program}"))?;
-
-        // The slave handle must go away or the pty never reports EOF when the
-        // child exits, and the pane would look alive forever.
-        drop(pair.slave);
-
-        let reader = pair.master.try_clone_reader()?;
-        let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
+        let (proc, reader) = PtyProcess::spawn(program, cols, rows)?;
         let grid = Arc::new(Mutex::new(Grid::new(cols as usize, rows as usize)));
-        let alive = Arc::new(AtomicBool::new(true));
-        let child = Arc::new(Mutex::new(child));
 
-        spawn_reader(
-            id,
-            reader,
-            Arc::clone(&grid),
-            Arc::clone(&writer),
-            Arc::clone(&alive),
-            events.clone(),
-        );
-        spawn_waiter(id, Arc::clone(&child), Arc::clone(&alive), events);
+        spawn_reader(id, reader, Arc::clone(&grid), &proc, events.clone());
+
+        let exit_tx = events;
+        proc.watch_exit(move || {
+            let _ = exit_tx.send(Ev::Exited(id));
+        });
 
         Ok(Pane {
             id,
             label: label.to_string(),
             grid,
-            alive,
-            writer,
-            master: pair.master,
-            child,
+            proc,
         })
     }
 
     pub fn is_alive(&self) -> bool {
-        self.alive.load(Ordering::Relaxed)
+        self.proc.is_alive()
+    }
+
+    /// Whether this pane is running a command or sitting at a prompt.
+    pub fn activity(&self, table: &crate::activity::ProcessTable) -> crate::activity::Activity {
+        table.activity_of(self.proc.pid(), self.is_alive())
     }
 
     /// Title reported by the child, falling back to the label we gave it.
@@ -113,13 +75,7 @@ impl Pane {
     }
 
     pub fn write_input(&self, bytes: &[u8]) {
-        if !self.is_alive() {
-            return;
-        }
-        if let Ok(mut w) = self.writer.lock() {
-            let _ = w.write_all(bytes);
-            let _ = w.flush();
-        }
+        self.proc.write_input(bytes);
     }
 
     pub fn resize(&self, cols: u16, rows: u16) {
@@ -128,21 +84,16 @@ impl Pane {
         // Order matters: resize our model first so a redraw racing the child's
         // response never indexes outside the grid.
         self.grid.lock().unwrap().resize(cols as usize, rows as usize);
-        let _ = self.master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
+        self.proc.resize(cols, rows);
     }
 
     pub fn kill(&mut self) {
-        if let Ok(mut c) = self.child.lock() {
-            let _ = c.kill();
-        }
-        self.alive.store(false, Ordering::Relaxed);
+        self.proc.kill();
     }
 }
+
+// The old per-pane waiter now lives in `PtyProcess::watch_exit`, shared with
+// the GUI front end.
 
 /// cmd.exe announces its title as the full path to its own executable, which
 /// fills a narrow button with `C:\Windows\syst` and tells you nothing. Reduce a
@@ -158,37 +109,6 @@ fn shorten_title(title: &str) -> String {
         }
     }
     t.to_string()
-}
-
-/// Watches the child process itself, because on Windows the pty gives us no
-/// signal when it dies. Polls rather than blocking in `wait()` so that `kill`
-/// can still take the lock.
-fn spawn_waiter(
-    id: usize,
-    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
-    alive: Arc<AtomicBool>,
-    events: Sender<Ev>,
-) {
-    std::thread::Builder::new()
-        .name(format!("pane-{id}-waiter"))
-        .spawn(move || loop {
-            let finished = match child.lock() {
-                Ok(mut c) => !matches!(c.try_wait(), Ok(None)),
-                Err(_) => true,
-            };
-
-            if finished {
-                // `swap` makes this a one-shot: the reader may also notice EOF
-                // and we want exactly one exit event per pane.
-                if alive.swap(false, Ordering::Relaxed) {
-                    let _ = events.send(Ev::Exited(id));
-                }
-                return;
-            }
-
-            std::thread::sleep(std::time::Duration::from_millis(150));
-        })
-        .expect("failed to spawn pane waiter thread");
 }
 
 #[cfg(test)]
@@ -212,10 +132,14 @@ fn spawn_reader(
     id: usize,
     mut reader: Box<dyn Read + Send>,
     grid: Arc<Mutex<Grid>>,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    alive: Arc<AtomicBool>,
+    proc: &PtyProcess,
     events: Sender<Ev>,
 ) {
+    // Cloned so the reader can answer the child's queries without holding a
+    // borrow on the pane.
+    let replies = proc.reply_channel();
+    let alive = proc.alive_handle();
+
     std::thread::Builder::new()
         .name(format!("pane-{id}-reader"))
         .spawn(move || {
@@ -238,7 +162,7 @@ fn spawn_reader(
                 // Cursor-position and device-attribute answers go straight back
                 // to the child; it may be blocked waiting on them.
                 if !reply.is_empty() {
-                    if let Ok(mut w) = writer.lock() {
+                    if let Ok(mut w) = replies.lock() {
                         let _ = w.write_all(&reply);
                         let _ = w.flush();
                     }
@@ -249,7 +173,7 @@ fn spawn_reader(
                 }
             }
 
-            if alive.swap(false, Ordering::Relaxed) {
+            if alive.swap(false, std::sync::atomic::Ordering::Relaxed) {
                 let _ = events.send(Ev::Exited(id));
             }
         })

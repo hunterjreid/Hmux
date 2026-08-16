@@ -1,1 +1,4 @@
-/target
+﻿target/
+gui/node_modules/
+gui/src-tauri/gen/
+gui/app-icon.png

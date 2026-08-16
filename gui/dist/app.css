@@ -1,0 +1,321 @@
+/* mux — dark chrome around a terminal and a browser. */
+
+:root {
+  --bg: #14161a;
+  --panel: #1a1d23;
+  --rail: #171a1f;
+  --line: #262b33;
+  --text: #d6dae1;
+  --muted: #7e8794;
+  --accent: #4a9eff;
+  --accent-dim: #1e3a5f;
+  --busy: #3fd07f;
+  --dead: #ff5f56;
+
+  --rail-w: 232px;
+  --browser-w: 460px;
+
+  --term-bg: #0e1013;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: var(--rail-w) 4px 1fr 4px var(--browser-w);
+  height: 100vh;
+}
+
+/* ---------- splitters ---------- */
+
+.split {
+  background: var(--line);
+  cursor: col-resize;
+  transition: background 0.12s;
+}
+.split:hover,
+.split.dragging {
+  background: var(--accent);
+}
+
+/* ---------- left rail ---------- */
+
+.rail {
+  background: var(--rail);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.rail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px 10px;
+}
+
+.rail-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.rail-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+  background: #21252c;
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+
+.rail-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The thick buttons. */
+.term-btn {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 0 10px;
+  width: 100%;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #1d2128;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.12s, border-color 0.12s, transform 0.06s;
+}
+
+.term-btn:hover {
+  background: #232830;
+  border-color: #333a45;
+}
+
+.term-btn:active {
+  transform: translateY(1px);
+}
+
+.term-btn.active {
+  background: linear-gradient(180deg, #23405f 0%, #1d3busy 100%);
+  background: linear-gradient(180deg, #23405f 0%, #1d3450 100%);
+  border-color: var(--accent);
+}
+
+.term-btn .name {
+  grid-column: 2;
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.term-btn .status {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.term-btn.active .status {
+  color: #a9c8ea;
+}
+
+.term-btn .dot {
+  grid-row: 1 / span 2;
+}
+
+/* Status light: grey idle, pulsing green while a command runs, red when dead. */
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #4b525c;
+  display: inline-block;
+  flex: none;
+}
+
+.dot.busy {
+  background: var(--busy);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.dot.dead {
+  background: var(--dead);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(63, 208, 127, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(63, 208, 127, 0);
+  }
+}
+
+.new-btn {
+  margin: 10px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed #39414d;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+
+.new-btn:hover {
+  color: var(--busy);
+  border-color: var(--busy);
+  background: rgba(63, 208, 127, 0.06);
+}
+
+.new-plus {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* ---------- panels ---------- */
+
+.term-panel,
+.browser-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--panel);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  height: 40px;
+  flex: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.panel-title {
+  font-weight: 600;
+}
+
+.panel-status {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.icon-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  width: 28px;
+  height: 26px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.icon-btn:hover {
+  background: #262b33;
+  color: var(--text);
+}
+
+.term-host {
+  flex: 1;
+  min-height: 0;
+  background: var(--term-bg);
+  padding: 8px 4px 4px 10px;
+}
+
+.term-host .xterm {
+  height: 100%;
+}
+
+/* Each terminal keeps its own xterm instance; only one is shown at a time. */
+.term-view {
+  display: none;
+  height: 100%;
+}
+.term-view.visible {
+  display: block;
+}
+
+.term-empty {
+  color: var(--muted);
+  padding: 20px;
+  font-size: 13px;
+}
+
+/* ---------- browser ---------- */
+
+.browser-bar {
+  gap: 4px;
+}
+
+.url-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  border: 1px solid var(--line);
+  background: #12151a;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  user-select: text;
+}
+
+.url-input:focus {
+  border-color: var(--accent);
+}
+
+.browser-slot {
+  flex: 1;
+  min-height: 0;
+  background: #000;
+}

@@ -1,0 +1,23 @@
+[package]
+name = "mux-gui"
+version = "0.1.0"
+edition = "2021"
+description = "mux — terminals and a browser in one window"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `unstable` enables multiple webviews inside one window, which is what lets the
+# browser panel sit beside the terminal instead of in its own window.
+tauri = { version = "2", features = ["unstable"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+# The terminal half: ConPTY handling, shared with the console front end.
+mux = { path = "../.." }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

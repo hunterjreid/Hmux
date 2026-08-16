@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mux</title>
+    <link rel="stylesheet" href="vendor/xterm.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <div class="app">
+      <!-- Left: the terminal rail -->
+      <aside class="rail">
+        <div class="rail-head">
+          <span class="rail-title">Terminals</span>
+          <span class="rail-count" id="count">0</span>
+        </div>
+
+        <div class="rail-list" id="list"></div>
+
+        <button class="new-btn" id="new-btn">
+          <span class="new-plus">+</span>
+          <span>New terminal</span>
+        </button>
+      </aside>
+
+      <div class="split" id="split-term"></div>
+
+      <!-- Middle: the active terminal -->
+      <main class="term-panel">
+        <header class="panel-head">
+          <span class="dot" id="active-dot"></span>
+          <span class="panel-title" id="active-title">no terminal</span>
+          <span class="panel-status" id="active-status"></span>
+          <span class="spacer"></span>
+          <button class="icon-btn" id="close-btn" title="Close this terminal">✕</button>
+        </header>
+        <div class="term-host" id="term-host"></div>
+      </main>
+
+      <div class="split" id="split-browser"></div>
+
+      <!-- Right: a real browser webview lives on top of #browser-slot -->
+      <section class="browser-panel" id="browser-panel">
+        <header class="panel-head browser-bar">
+          <button class="icon-btn" id="back-btn" title="Back">‹</button>
+          <button class="icon-btn" id="fwd-btn" title="Forward">›</button>
+          <button class="icon-btn" id="reload-btn" title="Reload">⟳</button>
+          <input id="url" class="url-input" spellcheck="false"
+                 placeholder="Search or enter address" />
+        </header>
+        <!-- Deliberately empty: the native browser webview is positioned over
+             this element's rectangle. Nothing drawn here would be visible. -->
+        <div class="browser-slot" id="browser-slot"></div>
+      </section>
+    </div>
+
+    <script src="vendor/xterm.js"></script>
+    <script src="vendor/addon-fit.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
