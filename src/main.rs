@@ -23,6 +23,10 @@ const DEFAULT_SIDEBAR_W: u16 = 20;
 const FRAME: Duration = Duration::from_millis(16);
 /// Windows has no SIGWINCH, so console size is polled instead.
 const RESIZE_POLL: Duration = Duration::from_millis(100);
+/// How long a partial escape sequence is held before being treated as ordinary
+/// input. Long enough to reassemble a mouse report split across reads, short
+/// enough that a bare Escape keypress still feels instant.
+const ESC_FLUSH: Duration = Duration::from_millis(25);
 
 fn main() {
     let shell = parse_args();
@@ -209,10 +213,14 @@ fn run(shell: &str) -> Result<()> {
     let mut dirty = true;
     let mut last_frame = Instant::now();
     let mut last_resize_check = Instant::now();
+    let mut last_input = Instant::now();
 
     'outer: loop {
         match rx.recv_timeout(FRAME) {
             Ok(ev) => {
+                if matches!(ev, Ev::Input(_)) {
+                    last_input = Instant::now();
+                }
                 if handle(&mut mux, &mut router, &mut renderer, ev)? {
                     break 'outer;
                 }
@@ -220,6 +228,9 @@ fn run(shell: &str) -> Result<()> {
                 // Drain the burst: a busy shell can queue hundreds of output
                 // events per frame and each one does not deserve a repaint.
                 while let Ok(ev) = rx.try_recv() {
+                    if matches!(ev, Ev::Input(_)) {
+                        last_input = Instant::now();
+                    }
                     if handle(&mut mux, &mut router, &mut renderer, ev)? {
                         break 'outer;
                     }
@@ -227,6 +238,16 @@ fn run(shell: &str) -> Result<()> {
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break 'outer,
+        }
+
+        // A held partial escape sequence that never got completed is just a
+        // keypress — release it so Escape isn't swallowed.
+        if router.has_pending() && last_input.elapsed() >= ESC_FLUSH {
+            if let Some(Action::Forward(b)) = router.flush_pending() {
+                if let Some(p) = mux.panes.get(mux.active) {
+                    p.write_input(&b);
+                }
+            }
         }
 
         if last_resize_check.elapsed() >= RESIZE_POLL {

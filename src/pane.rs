@@ -107,10 +107,9 @@ impl Pane {
     pub fn display_name(&self) -> String {
         let title = self.grid.lock().unwrap().title.clone();
         if title.is_empty() {
-            self.label.clone()
-        } else {
-            title
+            return self.label.clone();
         }
+        shorten_title(&title)
     }
 
     pub fn write_input(&self, bytes: &[u8]) {
@@ -145,6 +144,22 @@ impl Pane {
     }
 }
 
+/// cmd.exe announces its title as the full path to its own executable, which
+/// fills a narrow button with `C:\Windows\syst` and tells you nothing. Reduce a
+/// bare executable path to its stem; leave any other title alone, since a
+/// program that sets a real title means it.
+fn shorten_title(title: &str) -> String {
+    let t = title.trim();
+    // Keyed on a path separator rather than the absence of spaces: plenty of
+    // real paths live under "Program Files".
+    if t.to_ascii_lowercase().ends_with(".exe") && (t.contains('\\') || t.contains('/')) {
+        if let Some(stem) = std::path::Path::new(t).file_stem() {
+            return stem.to_string_lossy().to_string();
+        }
+    }
+    t.to_string()
+}
+
 /// Watches the child process itself, because on Windows the pty gives us no
 /// signal when it dies. Polls rather than blocking in `wait()` so that `kill`
 /// can still take the lock.
@@ -174,6 +189,23 @@ fn spawn_waiter(
             std::thread::sleep(std::time::Duration::from_millis(150));
         })
         .expect("failed to spawn pane waiter thread");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shorten_title;
+
+    #[test]
+    fn executable_paths_are_reduced_to_a_name() {
+        assert_eq!(shorten_title(r"C:\Windows\system32\cmd.exe"), "cmd");
+        assert_eq!(shorten_title(r"C:\Program Files\PowerShell\pwsh.exe"), "pwsh");
+    }
+
+    #[test]
+    fn a_real_title_is_left_alone() {
+        assert_eq!(shorten_title("npm run dev"), "npm run dev");
+        assert_eq!(shorten_title("vim README.md"), "vim README.md");
+    }
 }
 
 fn spawn_reader(
