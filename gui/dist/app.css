@@ -10,6 +10,7 @@
   --accent: #4a9eff;
   --accent-dim: #1e3a5f;
   --busy: #3fd07f;
+  --waiting: #d8a13a;
   --dead: #ff5f56;
 
   --rail-w: 232px;
@@ -151,6 +152,24 @@ body {
   text-overflow: ellipsis;
 }
 
+/* Rename in place: click the name of the terminal you are already in, or
+   double-click any of them. */
+.term-btn .name.editing,
+.rename-input {
+  grid-column: 2;
+  width: 100%;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid var(--accent);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  outline: none;
+  user-select: text;
+}
+
 .term-btn .status {
   grid-column: 2;
   font-size: 11px;
@@ -207,9 +226,16 @@ body {
   flex: none;
 }
 
+/* Actively producing output. */
 .dot.busy {
   background: var(--busy);
   animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* A command is open but has gone quiet — almost always waiting on you.
+   Steady, not pulsing: the point is that nothing is happening. */
+.dot.waiting {
+  background: var(--waiting);
 }
 
 .dot.dead {
@@ -322,21 +348,29 @@ body {
 .panel-head {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 0 12px;
-  height: 40px;
+  gap: 4px;
+  padding: 0 8px;
+  height: 30px;
   flex: none;
-  border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
 
-.panel-title {
-  font-weight: 600;
+/* The terminal's own header carries no text and no border — it should read as
+   part of the terminal, not as a title bar. Its buttons stay out of the way
+   until the pointer is in the panel. */
+.term-panel > .panel-head {
+  background: var(--term-bg);
+  opacity: 0.25;
+  transition: opacity 0.15s;
 }
 
-.panel-status {
-  font-size: 11px;
-  color: var(--muted);
+.term-panel:hover > .panel-head {
+  opacity: 1;
+}
+
+/* The browser's bar is a real control surface, so it keeps its separator. */
+.browser-panel > .panel-head {
+  border-bottom: 1px solid var(--line);
 }
 
 .spacer {
@@ -370,7 +404,7 @@ body {
   flex: 1;
   min-height: 0;
   background: var(--term-bg);
-  padding: 8px 4px 4px 10px;
+  padding: 2px 4px 4px 10px;
 }
 
 .term-host .xterm {

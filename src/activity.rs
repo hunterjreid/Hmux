@@ -21,10 +21,16 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 pub enum Activity {
     /// Sitting at a prompt with no command running.
     Idle,
-    /// Running something. Carries the name of the deepest descendant, which is
-    /// the thing actually doing the work — `cargo` spawning `rustc` should read
-    /// as `rustc`.
-    Busy { command: String },
+    /// A command is running. `working` separates "actively doing something"
+    /// from "still open, but waiting on you".
+    ///
+    /// The process tree alone cannot tell those apart. A long-lived interactive
+    /// program — Claude Code, a REPL, `top` — is a running child the entire
+    /// time it is on screen, so the tree says "busy" even while it sits idle
+    /// waiting for input. Output does distinguish them: something that is
+    /// working emits text or animates, and something waiting for you goes
+    /// quiet.
+    Running { command: String, working: bool },
     /// The shell itself is gone.
     Dead,
 }
@@ -33,13 +39,25 @@ impl Activity {
     pub fn label(&self) -> String {
         match self {
             Activity::Idle => "idle".into(),
-            Activity::Busy { command } => command.clone(),
+            Activity::Running { command, working } => {
+                if *working {
+                    command.clone()
+                } else {
+                    format!("{command} · waiting")
+                }
+            }
             Activity::Dead => "exited".into(),
         }
     }
 
+    /// Actively producing output — the thing worth pulsing a light for.
     pub fn is_busy(&self) -> bool {
-        matches!(self, Activity::Busy { .. })
+        matches!(self, Activity::Running { working: true, .. })
+    }
+
+    /// A command is open, whether or not it is currently doing anything.
+    pub fn is_running(&self) -> bool {
+        matches!(self, Activity::Running { .. })
     }
 }
 
@@ -101,8 +119,18 @@ impl ProcessTable {
         }
     }
 
-    /// Classify a shell by whether it has any descendants.
-    pub fn activity_of(&self, shell_pid: Option<u32>, alive: bool) -> Activity {
+    /// Classify a shell: is anything running under it, and is that thing doing
+    /// something right now?
+    ///
+    /// `producing_output` is the caller's judgement about recent activity on
+    /// the pty; see [`Activity::Running`] for why the process tree cannot
+    /// answer that part on its own.
+    pub fn activity_of(
+        &self,
+        shell_pid: Option<u32>,
+        alive: bool,
+        producing_output: bool,
+    ) -> Activity {
         if !alive {
             return Activity::Dead;
         }
@@ -110,44 +138,31 @@ impl ProcessTable {
             return Activity::Idle;
         };
 
-        match self.deepest_descendant(pid) {
-            Some(name) => Activity::Busy {
+        match self.child_command(pid) {
+            Some(name) => Activity::Running {
                 command: strip_exe(&name),
+                working: producing_output,
             },
             None => Activity::Idle,
         }
     }
 
-    /// Walk down the process tree, following the first real child at each level.
+    /// The command the shell itself launched.
     ///
-    /// Depth-first to the bottom rather than just naming the direct child,
-    /// because the direct child is often a wrapper — the interesting name is
-    /// the leaf.
-    fn deepest_descendant(&self, root: u32) -> Option<String> {
-        let mut current = root;
-        let mut found: Option<String> = None;
-        // Bounded: a pathological or cyclic table must not spin forever.
-        for _ in 0..16 {
-            // Every console shell has a conhost hanging off it. Following that
-            // makes a terminal running `claude` report "running conhost", which
-            // is the plumbing rather than the answer.
-            let next = self
-                .entries
-                .iter()
-                .filter(|e| e.parent == current && e.pid != current)
-                .find(|e| !is_infrastructure(&e.name));
-
-            match next {
-                Some(child) => {
-                    found = Some(child.name.clone());
-                    current = child.pid;
-                }
-                // Only plumbing below, so stop and keep the deepest real name
-                // found so far — `?` here would throw away a good direct child.
-                None => break,
-            }
-        }
-        found
+    /// Deliberately the direct child rather than the deepest descendant. Going
+    /// to the bottom of the tree reports whatever the command happens to be
+    /// running *right now* — a terminal running Claude Code would announce
+    /// "python" the moment it shelled out to a script, which is both confusing
+    /// and unstable. The direct child is what you actually typed.
+    ///
+    /// Every console shell also has a conhost hanging off it, which is why
+    /// plumbing is skipped rather than reported.
+    fn child_command(&self, shell: u32) -> Option<String> {
+        self.entries
+            .iter()
+            .filter(|e| e.parent == shell && e.pid != shell)
+            .find(|e| !is_infrastructure(&e.name))
+            .map(|e| e.name.clone())
     }
 }
 
@@ -195,19 +210,19 @@ mod tests {
     #[test]
     fn a_dead_shell_is_dead_regardless_of_pid() {
         let table = ProcessTable::capture();
-        assert_eq!(table.activity_of(Some(4), false), Activity::Dead);
-        assert_eq!(table.activity_of(None, false), Activity::Dead);
+        assert_eq!(table.activity_of(Some(4), false, true), Activity::Dead);
+        assert_eq!(table.activity_of(None, false, false), Activity::Dead);
     }
 
     #[test]
     fn a_childless_process_reads_as_idle() {
         let table = ProcessTable::capture();
         // A pid that cannot have children in the table.
-        assert_eq!(table.activity_of(Some(u32::MAX), true), Activity::Idle);
+        assert_eq!(table.activity_of(Some(u32::MAX), true, true), Activity::Idle);
     }
 
     #[test]
-    fn a_process_with_a_child_reads_as_busy() {
+    fn a_process_with_a_child_reads_as_running() {
         // Spawn a real child and confirm we notice it.
         let mut child = std::process::Command::new("cmd.exe")
             .args(["/c", "ping -n 4 127.0.0.1 > NUL"])
@@ -215,14 +230,53 @@ mod tests {
             .expect("failed to spawn a child process");
 
         let table = ProcessTable::capture();
-        let activity = table.activity_of(Some(std::process::id()), true);
+        let activity = table.activity_of(Some(std::process::id()), true, true);
 
         let _ = child.kill();
         let _ = child.wait();
 
         assert!(
-            activity.is_busy(),
+            activity.is_running(),
             "a process with a live child was reported as {activity:?}"
+        );
+    }
+
+    #[test]
+    fn a_quiet_command_is_running_but_not_working() {
+        // This is the Claude Code case: the program is open the whole time, so
+        // the process tree always says "running". Only the absence of output
+        // distinguishes waiting-for-you from doing-something.
+        let table = ProcessTable {
+            entries: vec![
+                Entry { pid: 100, parent: 1, name: "powershell.exe".into() },
+                Entry { pid: 101, parent: 100, name: "node.exe".into() },
+            ],
+        };
+
+        let busy = table.activity_of(Some(100), true, true);
+        assert!(busy.is_busy());
+        assert_eq!(busy.label(), "node");
+
+        let quiet = table.activity_of(Some(100), true, false);
+        assert!(quiet.is_running(), "a quiet command is still running");
+        assert!(!quiet.is_busy(), "a quiet command must not pulse as working");
+        assert_eq!(quiet.label(), "node · waiting");
+    }
+
+    #[test]
+    fn the_command_reported_is_what_the_shell_launched() {
+        // Claude Code shelling out to python must not relabel the terminal as
+        // "python" -- the direct child is the thing the user actually ran.
+        let table = ProcessTable {
+            entries: vec![
+                Entry { pid: 100, parent: 1, name: "powershell.exe".into() },
+                Entry { pid: 101, parent: 100, name: "node.exe".into() },
+                Entry { pid: 102, parent: 101, name: "python.exe".into() },
+            ],
+        };
+        assert_eq!(
+            table.activity_of(Some(100), true, true),
+            Activity::Running { command: "node".into(), working: true }
         );
     }
 
@@ -252,7 +306,7 @@ mod tests {
                 Entry { pid: 101, parent: 100, name: "conhost.exe".into() },
             ],
         };
-        assert_eq!(table.activity_of(Some(100), true), Activity::Idle);
+        assert_eq!(table.activity_of(Some(100), true, true), Activity::Idle);
     }
 
     #[test]
@@ -266,8 +320,8 @@ mod tests {
             ],
         };
         assert_eq!(
-            table.activity_of(Some(100), true),
-            Activity::Busy { command: "node".into() }
+            table.activity_of(Some(100), true, true),
+            Activity::Running { command: "node".into(), working: true }
         );
     }
 

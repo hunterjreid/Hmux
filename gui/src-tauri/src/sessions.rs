@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde::Serialize;
@@ -55,11 +56,21 @@ struct History {
     last_seq: u64,
 }
 
+/// How recently a terminal must have printed something to count as working.
+///
+/// An interactive TUI redraws constantly while it is doing something — a
+/// spinner alone is several frames a second — and falls silent the moment it
+/// wants input. Comfortably longer than a spinner frame, short enough that
+/// "finished" registers immediately.
+const WORKING_WINDOW: Duration = Duration::from_millis(700);
+
 struct Session {
     id: SessionId,
     title: String,
     proc: PtyProcess,
     history: Arc<Mutex<History>>,
+    /// When this terminal last produced output.
+    last_output: Arc<Mutex<Instant>>,
 }
 
 #[derive(Default)]
@@ -84,8 +95,16 @@ impl Sessions {
 
         let (proc, reader) = PtyProcess::spawn(shell, cols, rows)?;
         let history = Arc::new(Mutex::new(History::default()));
+        let last_output = Arc::new(Mutex::new(Instant::now()));
 
-        spawn_reader(id, reader, Arc::clone(&history), app.clone(), &proc);
+        spawn_reader(
+            id,
+            reader,
+            Arc::clone(&history),
+            Arc::clone(&last_output),
+            app.clone(),
+            &proc,
+        );
 
         let exit_app = app.clone();
         proc.watch_exit(move || {
@@ -104,6 +123,7 @@ impl Sessions {
                 title,
                 proc,
                 history,
+                last_output,
             },
         );
         self.order.push(id);
@@ -152,12 +172,18 @@ impl Sessions {
             .iter()
             .filter_map(|id| self.map.get(id))
             .map(|s| {
-                let activity = table.activity_of(s.proc.pid(), s.proc.is_alive());
+                let working = s
+                    .last_output
+                    .lock()
+                    .map(|t| t.elapsed() < WORKING_WINDOW)
+                    .unwrap_or(false);
+                let activity = table.activity_of(s.proc.pid(), s.proc.is_alive(), working);
                 TerminalInfo {
                     id: s.id,
                     title: s.title.clone(),
                     status: activity.label(),
                     busy: activity.is_busy(),
+                    running: activity.is_running(),
                     alive: s.proc.is_alive(),
                 }
             })
@@ -169,6 +195,7 @@ fn spawn_reader(
     id: SessionId,
     mut reader: Box<dyn Read + Send>,
     history: Arc<Mutex<History>>,
+    last_output: Arc<Mutex<Instant>>,
     app: AppHandle,
     proc: &PtyProcess,
 ) {
@@ -212,6 +239,12 @@ fn spawn_reader(
 
                 if text.is_empty() {
                     continue;
+                }
+
+                // Stamped before the emit so a slow UI cannot make a working
+                // terminal look idle.
+                if let Ok(mut t) = last_output.lock() {
+                    *t = Instant::now();
                 }
 
                 // Append and take the sequence number under one lock, so the

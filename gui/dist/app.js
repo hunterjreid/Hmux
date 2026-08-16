@@ -18,9 +18,6 @@ const els = {
   count: document.getElementById("count"),
   newBtn: document.getElementById("new-btn"),
   host: document.getElementById("term-host"),
-  activeTitle: document.getElementById("active-title"),
-  activeStatus: document.getElementById("active-status"),
-  activeDot: document.getElementById("active-dot"),
   closeBtn: document.getElementById("close-btn"),
   slot: document.getElementById("browser-slot"),
   url: document.getElementById("url"),
@@ -36,6 +33,9 @@ const els = {
 /** Shell used for new terminals; the first one Rust offers is the default. */
 let shells = [];
 let chosenShell = null;
+
+/** Ctrl+scroll adjusts this, which is the whole of the font UI. */
+let fontSize = 13;
 
 /** Surface a failure instead of swallowing it into the console. */
 function showError(where, e) {
@@ -112,9 +112,9 @@ function makeTerminal(id) {
   els.host.appendChild(view);
 
   const term = new Terminal({
-    fontFamily: 'Cascadia Mono, Consolas, "Courier New", monospace',
-    fontSize: 13,
-    lineHeight: 1.2,
+    fontFamily: '"Geist Mono", "Cascadia Code", Consolas, monospace',
+    fontSize: fontSize,
+    lineHeight: 1.25,
     cursorBlink: true,
     allowProposedApi: true,
     scrollback: 10000,
@@ -156,7 +156,16 @@ function makeTerminal(id) {
     browserOpen: false,
     // Lines that arrived while this terminal was not the one on screen.
     unread: 0,
+    // Set by renaming. Overrides whatever the shell calls itself.
+    customName: null,
   };
+
+  // Programs announce what they are doing through the window title; showing it
+  // is free and often says more than the process name can.
+  term.onTitleChange((title) => {
+    entry.shellTitle = title;
+    scheduleButtons();
+  });
   terminals.set(id, entry);
 
   invoke("terminal_backlog", { id })
@@ -310,6 +319,55 @@ async function closeTerminal(id) {
 
 // ------------------------------------------------------------------ sidebar
 
+/** A terminal's name: whatever you renamed it to, else the shell and number. */
+function displayName(info) {
+  const entry = terminals.get(info.id);
+  if (entry && entry.customName) return entry.customName;
+  return `${info.title} ${info.id}`;
+}
+
+/**
+ * Turn a button's name into an editable field in place.
+ *
+ * Deliberately not a dialog: renaming a terminal should cost one click and one
+ * Enter, or nothing at all if you change your mind.
+ */
+function beginRename(id, btn, nameEl) {
+  const entry = terminals.get(id);
+  if (!entry || btn.querySelector(".rename-input")) return;
+
+  const input = document.createElement("input");
+  input.className = "rename-input";
+  input.value = nameEl.textContent;
+  input.spellcheck = false;
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    if (commit) {
+      const value = input.value.trim();
+      // Clearing the name hands it back to the shell rather than leaving it
+      // blank.
+      entry.customName = value.length ? value : null;
+    }
+    renderButtons();
+  };
+
+  input.onkeydown = (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") finish(true);
+    if (e.key === "Escape") finish(false);
+  };
+  input.onblur = () => finish(true);
+  // The button's own click handler would otherwise re-select or re-open.
+  input.onclick = (e) => e.stopPropagation();
+  input.ondblclick = (e) => e.stopPropagation();
+}
+
 function renderButtons() {
   // The UI knows a terminal exists the moment it creates one. Deriving the
   // button list from the status poller instead meant that if a single status
@@ -317,27 +375,63 @@ function renderButtons() {
   // running fine.
   const infos = [...terminals.entries()].map(
     ([id, e]) =>
-      e.info ?? { id, title: "cmd", status: "starting…", busy: false, alive: true }
+      e.info ?? {
+        id,
+        title: "shell",
+        status: "starting…",
+        busy: false,
+        running: false,
+        alive: true,
+      }
   );
 
   els.count.textContent = String(infos.length);
   els.list.innerHTML = "";
 
   for (const info of infos) {
+    const entryForBtn = terminals.get(info.id);
     const btn = document.createElement("button");
     btn.className = "term-btn" + (info.id === activeId ? " active" : "");
-    btn.onclick = () => selectTerminal(info.id);
 
     const dot = document.createElement("span");
-    dot.className = "dot" + (!info.alive ? " dead" : info.busy ? " busy" : "");
+    // Green pulse = producing output. Steady amber = a command is open but has
+    // gone quiet, which almost always means it is waiting on you.
+    dot.className =
+      "dot" +
+      (!info.alive
+        ? " dead"
+        : info.busy
+          ? " busy"
+          : info.running
+            ? " waiting"
+            : "");
 
+    const label = displayName(info);
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = `${info.title} ${info.id}`;
+    name.textContent = label;
+
+    // Click the name of the terminal you are already in to rename it; double
+    // click works from anywhere.
+    btn.onclick = (e) => {
+      if (info.id === activeId && e.target === name) {
+        beginRename(info.id, btn, name);
+      } else {
+        selectTerminal(info.id);
+      }
+    };
+    btn.ondblclick = (e) => {
+      e.preventDefault();
+      beginRename(info.id, btn, name);
+    };
 
     const status = document.createElement("span");
     status.className = "status";
-    status.textContent = info.busy ? `running ${info.status}` : info.status;
+    // The window title is usually more specific than the process name.
+    status.textContent =
+      entryForBtn && entryForBtn.shellTitle && info.busy
+        ? entryForBtn.shellTitle
+        : info.status;
 
     btn.append(dot, name, status);
 
@@ -361,15 +455,10 @@ function renderButtons() {
     els.list.appendChild(btn);
   }
 
+  // The window title is the only place the active terminal is named now; the
+  // panel header deliberately says nothing.
   const active = infos.find((i) => i.id === activeId);
-  els.activeTitle.textContent = active ? `${active.title} ${active.id}` : "no terminal";
-  els.activeStatus.textContent = active
-    ? active.busy
-      ? `running ${active.status}`
-      : active.status
-    : "";
-  els.activeDot.className =
-    "dot" + (!active ? "" : !active.alive ? " dead" : active.busy ? " busy" : "");
+  document.title = active ? `${displayName(active)} — mux` : "mux";
 }
 
 async function refresh() {
@@ -555,6 +644,21 @@ async function main() {
     scheduleBounds();
     if (activeId !== null) syncSize(activeId);
   });
+
+  // Ctrl+scroll to resize the text. The whole font UI, and it adds no chrome.
+  els.host.addEventListener(
+    "wheel",
+    (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      fontSize = Math.min(28, Math.max(8, fontSize + (e.deltaY < 0 ? 1 : -1)));
+      for (const [id, entry] of terminals) {
+        entry.term.options.fontSize = fontSize;
+        if (id === activeId) syncSize(id);
+      }
+    },
+    { passive: false }
+  );
 
   await newTerminal();
   // Starts closed; the toggle in the terminal header opens it per terminal.

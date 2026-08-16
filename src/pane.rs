@@ -24,7 +24,13 @@ pub struct Pane {
     pub label: String,
     pub grid: Arc<Mutex<Grid>>,
     proc: PtyProcess,
+    /// When this pane last produced output, which is how a command that is
+    /// working is told apart from one waiting on input.
+    last_output: Arc<Mutex<std::time::Instant>>,
 }
+
+/// How recently a terminal must have printed something to count as working.
+const WORKING_WINDOW: std::time::Duration = std::time::Duration::from_millis(700);
 
 impl Pane {
     pub fn spawn(
@@ -40,8 +46,16 @@ impl Pane {
 
         let (proc, reader) = PtyProcess::spawn(program, cols, rows)?;
         let grid = Arc::new(Mutex::new(Grid::new(cols as usize, rows as usize)));
+        let last_output = Arc::new(Mutex::new(std::time::Instant::now()));
 
-        spawn_reader(id, reader, Arc::clone(&grid), &proc, events.clone());
+        spawn_reader(
+            id,
+            reader,
+            Arc::clone(&grid),
+            Arc::clone(&last_output),
+            &proc,
+            events.clone(),
+        );
 
         let exit_tx = events;
         proc.watch_exit(move || {
@@ -53,6 +67,7 @@ impl Pane {
             label: label.to_string(),
             grid,
             proc,
+            last_output,
         })
     }
 
@@ -60,9 +75,15 @@ impl Pane {
         self.proc.is_alive()
     }
 
-    /// Whether this pane is running a command or sitting at a prompt.
+    /// Whether this pane is running a command, and whether that command is
+    /// actually doing anything right now.
     pub fn activity(&self, table: &crate::activity::ProcessTable) -> crate::activity::Activity {
-        table.activity_of(self.proc.pid(), self.is_alive())
+        let working = self
+            .last_output
+            .lock()
+            .map(|t| t.elapsed() < WORKING_WINDOW)
+            .unwrap_or(false);
+        table.activity_of(self.proc.pid(), self.is_alive(), working)
     }
 
     /// Title reported by the child, falling back to the label we gave it.
@@ -132,6 +153,7 @@ fn spawn_reader(
     id: usize,
     mut reader: Box<dyn Read + Send>,
     grid: Arc<Mutex<Grid>>,
+    last_output: Arc<Mutex<std::time::Instant>>,
     proc: &PtyProcess,
     events: Sender<Ev>,
 ) {
@@ -152,6 +174,10 @@ fn spawn_reader(
                     Ok(n) => n,
                     Err(_) => break,
                 };
+
+                if let Ok(mut t) = last_output.lock() {
+                    *t = std::time::Instant::now();
+                }
 
                 let reply = {
                     let mut g = grid.lock().unwrap();

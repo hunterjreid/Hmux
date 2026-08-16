@@ -44,7 +44,26 @@ impl PtyProcess {
         if let Ok(cwd) = std::env::current_dir() {
             cmd.cwd(cwd);
         }
+
+        // Tell programs what this terminal can actually do.
+        //
+        // TERM alone is not enough. Node's `supports-color` (and most of the
+        // ecosystem built on it) treats a terminal without COLORTERM as
+        // 16-colour, and rich TUIs then collapse their entire palette onto one
+        // of those sixteen — which reads as "the terminal has no colours" when
+        // the terminal was never the problem.
         cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+        cmd.env("TERM_PROGRAM", "mux");
+
+        // Whatever launched mux may have had colour switched off for its own
+        // output — build scripts, CI wrappers and agent harnesses all do this.
+        // Inheriting that would silently strip colour from every shell inside a
+        // terminal that has just declared itself truecolor, and the symptom
+        // ("this terminal has no colours") points nowhere near the cause.
+        // Anyone who genuinely wants monochrome can still set it in the shell.
+        cmd.env_remove("NO_COLOR");
+        cmd.env_remove("NODE_DISABLE_COLORS");
 
         let child = pair
             .slave

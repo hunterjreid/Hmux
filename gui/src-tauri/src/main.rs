@@ -65,9 +65,12 @@ fn ui_log(message: String) {
 pub struct TerminalInfo {
     pub id: SessionId,
     pub title: String,
-    /// "idle", "exited", or the name of the running command.
+    /// "idle", "exited", the running command, or "<command> · waiting".
     pub status: String,
+    /// Actively producing output right now.
     pub busy: bool,
+    /// A command is open, whether or not it is doing anything.
+    pub running: bool,
     pub alive: bool,
 }
 
@@ -370,6 +373,8 @@ fn main() {
                                 a.id != b.id
                                     || a.status != b.status
                                     || a.title != b.title
+                                    || a.busy != b.busy
+                                    || a.running != b.running
                                     || a.alive != b.alive
                             });
 

@@ -32,13 +32,11 @@
 
       <!-- Middle: the active terminal -->
       <main class="term-panel">
+        <!-- Deliberately almost invisible: the terminal's name and state are
+             already in the rail, so repeating them here is chrome for its own
+             sake. The controls fade in on hover. -->
         <header class="panel-head">
-          <span class="dot" id="active-dot"></span>
-          <span class="panel-title" id="active-title">no terminal</span>
-          <span class="panel-status" id="active-status"></span>
           <span class="spacer"></span>
-          <!-- The browser starts closed; each terminal remembers whether it
-               had one open. -->
           <button class="icon-btn" id="browser-btn" title="Toggle this terminal's browser">
             ◧
           </button>

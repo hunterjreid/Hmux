@@ -173,7 +173,7 @@ fn a_running_command_flips_the_terminal_to_busy_and_back() {
     let busy = wait_for_activity(&pane, true, Duration::from_secs(15))
         .expect("a running command never registered as busy");
     match &busy {
-        Activity::Busy { command } => {
+        Activity::Running { command, .. } => {
             assert_eq!(command, "ping", "busy, but reported `{command}`");
         }
         other => panic!("expected Busy, got {other:?}"),
@@ -224,6 +224,40 @@ fn colour_survives_the_whole_pipeline() {
     assert!(
         coloured.is_some(),
         "REDTEXT reached the grid with no colour at all — the pipeline is dropping SGR"
+    );
+}
+
+#[test]
+fn programs_are_told_this_terminal_does_truecolor() {
+    // Node reports what it thinks the terminal supports: 24 = truecolor,
+    // 8 = 256 colours, 4 = 16 colours, 1 = none.
+    //
+    // This is the difference between Claude Code drawing its whole UI in one
+    // ANSI colour and drawing it properly, so it is worth pinning: a terminal
+    // that under-reports here looks broken while being perfectly capable.
+    let (tx, _rx) = mpsc::channel();
+    let pane = Pane::spawn(1, "ps", "powershell.exe", 100, 30, tx)
+        .expect("failed to open a ConPTY");
+
+    assert!(
+        wait_for(&pane, ">", Duration::from_secs(30)).is_some(),
+        "powershell never produced a prompt"
+    );
+
+    // The marker is assembled at runtime so it cannot appear in the echoed
+    // command line — otherwise the wait matches the echo and reads the screen
+    // before node has answered.
+    pane.write_input(
+        b"node -p \"['dep','th'].join('')+'='+process.stdout.getColorDepth()\"\r\n",
+    );
+
+    let screen = wait_for(&pane, "depth=", Duration::from_secs(40))
+        .expect("node never reported a colour depth");
+
+    assert!(
+        screen.contains("depth=24"),
+        "node sees a degraded terminal, so colourful programs will flatten \
+         their palette. Wanted depth=24, screen was:\n{screen}"
     );
 }
 
