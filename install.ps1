@@ -81,8 +81,16 @@ $daemonRunning = [bool] (Get-Process -Name 'mux-daemon' -ErrorAction SilentlyCon
 if ($daemonRunning) {
     $live = Join-Path $InstallDir 'mux-daemon.exe'
     if (Test-Path $live) {
+        # A unique name every time, rather than a fixed `.old`.
+        #
+        # The sweep above cannot delete a file the previous daemon is still
+        # executing, so on a second update the fixed name is still there and
+        # still locked — and `Move-Item -Force` cannot overwrite a file that is
+        # in use, so the install failed on its own leftovers. A name nothing
+        # else can be holding never collides.
+        $aside = "$live.$(Get-Random).old"
         try {
-            Move-Item -Path $live -Destination "$live.old" -Force
+            Move-Item -Path $live -Destination $aside
             Write-Step 'moved the running daemon aside; your terminals keep running'
         } catch {
             Fail "could not move the running daemon aside: $($_.Exception.Message)"

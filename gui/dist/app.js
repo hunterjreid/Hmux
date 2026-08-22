@@ -361,6 +361,11 @@ function applyLoading() {
 const HELP_PAGE = "https://github.com/hunterjreid/mux#readme";
 const FEEDBACK_PAGE = "https://github.com/hunterjreid/mux/issues/new";
 
+/** Hand a link to the machine's browser rather than to the panel. */
+function openExternal(url) {
+  invoke("open_external", { url }).catch((e) => showError("open", e));
+}
+
 /** Which pane the popover is showing: the root, or Settings. */
 let settingsPane = "root";
 
@@ -434,18 +439,38 @@ function openSettings(pane = "root") {
     option("Terminals on the right", mirrored, () => {
       if (!mirrored) toggleMirror();
     });
+
+    heading("Terminal background");
+    option("None", !background, () => setBackground(""));
+    for (const { label, file, tile } of SHIPPED_BACKGROUNDS) {
+      option(label, backgroundSource === file, () =>
+        useShippedBackground(file, !!tile)
+      );
+    }
+    // Anything set that did not come from the list above came from a file.
+    option("From a file…", !!background && !backgroundSource, chooseBackground);
+
+    // Only worth showing when there is something for it to act on.
+    if (background) {
+      heading("Background strength");
+      for (const { label, dim } of BG_STRENGTHS) {
+        option(label, backgroundDim === dim, () => setBackgroundDim(dim));
+      }
+    }
   } else {
     item("#i-gear", "Settings", () => openSettings("settings"), {
       keepOpen: true,
     });
     item("#i-info", "About mux", showAbout);
-    // Both of these open in the terminal's own browser rather than in another
-    // application, for the same reason a clicked link does: the page belongs
-    // beside the shell you were in when you wanted it.
-    item("#i-help", "Help", () => openInBrowserPanel(activeId, HELP_PAGE));
-    item("#i-feedback", "Send feedback", () =>
-      openInBrowserPanel(activeId, FEEDBACK_PAGE)
-    );
+    // These leave the app, unlike a link clicked in a terminal.
+    //
+    // The panel exists so that what you follow from a shell stays beside that
+    // shell. None of these came from a shell: they are the project's own
+    // pages, and putting them in the panel takes it away from whatever you had
+    // open next to the terminal you were working in to read something that has
+    // nothing to do with it.
+    item("#i-help", "Help", () => openExternal(HELP_PAGE));
+    item("#i-feedback", "Send feedback", () => openExternal(FEEDBACK_PAGE));
     item("#i-download", "Check for updates", () => {
       // The six-hourly check is silent when there is nothing new. Asked for
       // explicitly, saying nothing back reads as broken.
@@ -482,6 +507,192 @@ function openSettings(pane = "root") {
   const box = menu.getBoundingClientRect();
   menu.style.left = `${Math.max(4, Math.min(button.right - box.width, window.innerWidth - box.width - 6))}px`;
   menu.style.top = `${button.bottom + 4}px`;
+}
+
+// ------------------------------------------------------- background image
+
+/**
+ * The picture behind the terminal, as a data URL, or "" for none.
+ *
+ * One of the shipped ones or a file of your own; both end up here in the same
+ * form, because a background that stopped working when the file it came from
+ * was moved would be worse than none.
+ */
+let background = "";
+
+/**
+ * Which of the shipped images is in use, by file, or "" for none of them.
+ *
+ * Kept separately because the image itself is stored as a data URL and a data
+ * URL cannot say where it came from. Without this the menu could not put the
+ * tick on the right row: every choice looks identical once it has been read.
+ * In local storage rather than beside the image, since it is a fact about this
+ * window's menu and not about the picture.
+ */
+const BG_SOURCE_KEY = "mux.bgSource";
+let backgroundSource = localStorage.getItem(BG_SOURCE_KEY) || "";
+
+/** Whether the current background repeats rather than covering. */
+const BG_TILE_KEY = "mux.bgTile";
+let backgroundTiles = localStorage.getItem(BG_TILE_KEY) === "1";
+
+/**
+ * What comes with the app. Kept short: this is a texture, not a gallery.
+ *
+ * `tile` says the image repeats at its own size rather than being stretched to
+ * fill. A photograph has to cover the pane or it looks like a sample of
+ * itself; a generated pattern has a period, and stretching one over a wide
+ * terminal blows the dots up into visible blobs and throws away the thing that
+ * made it a dither.
+ */
+const SHIPPED_BACKGROUNDS = [
+  // Dark first. Every one of these sits under a terminal, and the dark ones
+  // are the ones that work at any strength — a pale image only stays out of
+  // the way at the very top of the dim range.
+  { label: "Harbour", file: "backgrounds/harbour.jpg" },
+  { label: "Coast", file: "backgrounds/coast.jpg" },
+  { label: "Ridges", file: "backgrounds/ridges.jpg" },
+  { label: "Auckland", file: "backgrounds/auckland.webp" },
+  { label: "Daybreak", file: "backgrounds/daybreak.jpg" },
+  { label: "Diffusion", file: "backgrounds/dither.svg", tile: true },
+];
+
+/**
+ * How far the scrim goes, as choices rather than a number.
+ *
+ * A setting because there is no right answer: the scrim is dimming toward the
+ * terminal's own background, so how much of the picture survives depends on
+ * how dark the picture already was. The same value that leaves a photograph
+ * pleasantly muted erases a dark one completely — which is exactly what
+ * happened to the shipped image at the first value tried.
+ *
+ * Named for what you see rather than for the opacity, which runs backwards:
+ * more scrim is less picture, and a menu of decreasing numbers labelled
+ * "stronger" is a menu people pick the wrong end of.
+ */
+const BG_STRENGTHS = [
+  { label: "Barely there", dim: 0.9 },
+  { label: "Subtle", dim: 0.82 },
+  { label: "Medium", dim: 0.65 },
+  { label: "Strong", dim: 0.4 },
+];
+const BG_DIM_KEY = "mux.bgDim";
+let backgroundDim = Number(localStorage.getItem(BG_DIM_KEY)) || 0.82;
+
+/**
+ * Put the background on, or take it off.
+ *
+ * xterm has to be told separately. It paints an opaque rectangle of the theme
+ * background under every cell unless `allowTransparency` is on, so without
+ * this the image is behind a terminal that is not see-through and nothing
+ * shows. The flag costs something to have on — the renderer can no longer
+ * assume what is under a glyph — which is why it is only set when there is
+ * actually an image, rather than left on for everyone.
+ */
+function applyBackground() {
+  const on = !!background;
+  els.app.classList.toggle("has-bg", on);
+  els.app.classList.toggle("bg-tiled", on && backgroundTiles);
+  document.documentElement.style.setProperty(
+    "--term-image",
+    on ? `url("${background}")` : "none"
+  );
+  document.documentElement.style.setProperty(
+    "--term-image-dim",
+    String(backgroundDim)
+  );
+
+  for (const entry of terminals.values()) {
+    try {
+      entry.term.options.allowTransparency = on;
+      entry.term.options.theme = {
+        ...THEME,
+        background: on ? "rgba(0, 0, 0, 0)" : THEME.background,
+      };
+    } catch {
+      // An older xterm that will not take these at runtime. The image still
+      // shows around the text, which is most of the effect.
+    }
+  }
+}
+
+async function loadBackground() {
+  try {
+    background = (await invoke("get_background")) || "";
+  } catch {
+    background = "";
+  }
+  applyBackground();
+}
+
+function setBackgroundDim(dim) {
+  backgroundDim = dim;
+  try {
+    localStorage.setItem(BG_DIM_KEY, String(dim));
+  } catch {}
+  applyBackground();
+}
+
+async function setBackground(data, source = "", tiles = false) {
+  background = data || "";
+  backgroundSource = background ? source : "";
+  backgroundTiles = !!background && tiles;
+  try {
+    localStorage.setItem(BG_SOURCE_KEY, backgroundSource);
+    localStorage.setItem(BG_TILE_KEY, backgroundTiles ? "1" : "0");
+  } catch {}
+  applyBackground();
+  try {
+    await invoke("set_background", { data: background || null });
+  } catch (e) {
+    showError("background", e);
+  }
+}
+
+/** Turn one of the shipped images into a data URL, so both kinds are alike. */
+async function useShippedBackground(file, tiles) {
+  try {
+    const response = await fetch(file);
+    if (!response.ok) throw new Error(`${file}: HTTP ${response.status}`);
+    const blob = await response.blob();
+    const data = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+    await setBackground(data, file, tiles);
+  } catch (e) {
+    showError("background", e);
+  }
+}
+
+/**
+ * Pick a file.
+ *
+ * A hidden `<input type="file">` rather than the native dialogue, which would
+ * be another Tauri plugin and a capability in the manifest for one button.
+ * The webview's own picker is the same Windows dialogue underneath.
+ */
+function chooseBackground() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/*";
+  input.onchange = () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    // Anything much larger than this is a photograph nobody will see at 8%
+    // opacity, and it is written to disk and read back on every launch.
+    if (file.size > 12 * 1024 * 1024) {
+      showError("background", "that image is over 12 MB — try a smaller one");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setBackground(String(reader.result));
+    reader.onerror = () => showError("background", "could not read that file");
+    reader.readAsDataURL(file);
+  };
+  input.click();
 }
 
 /** The Windows user, read once. Only the profile menu wants it. */
@@ -539,11 +750,14 @@ function toggleMirror() {
 // `\x1b[38;2;r;g;b m` is exact.
 const THEME = {
   // Must stay equal to --term-bg in app.css, or the padding around the
-  // terminal reads as a frame. Monokai Dimmed's editor.background.
-  background: "#1E1E1E",
+  // terminal reads as a frame. A step below Monokai Dimmed's own
+  // editor.background: everything that is chrome keeps the theme's greys, and
+  // the terminal sitting under all of them is what makes it read as a hole in
+  // the window rather than one more panel.
+  background: "#0E0E0E",
   foreground: "#C5C8C6",
   cursor: "#C5C8C6",
-  cursorAccent: "#1E1E1E",
+  cursorAccent: "#0E0E0E",
   selectionBackground: "#676B7180",
   black: "#1E1E1E",
   red: "#C4265E",
@@ -565,9 +779,12 @@ const THEME = {
   // this background is close enough to invisible that the terminal reads as
   // having no scrollbar at all. A scrollbar is also a position indicator, and
   // one you cannot see does not indicate anything.
-  scrollbarSliderBackground: "#4A4F58",
-  scrollbarSliderHoverBackground: "#5E646F",
-  scrollbarSliderActiveBackground: "#767D8A",
+  // Toned down with the rest of the palette. The bar only appears on hover
+  // now, so it no longer has to be bright enough to be ignorable — it has to
+  // be dim enough not to be the brightest thing on a near-black terminal.
+  scrollbarSliderBackground: "#3A3F47",
+  scrollbarSliderHoverBackground: "#4E545E",
+  scrollbarSliderActiveBackground: "#646A76",
 };
 
 /**
@@ -614,7 +831,12 @@ function makeTerminal(id, initial = null) {
     // to get there — and a session that talks for an hour goes through ten
     // thousand lines without trying.
     scrollback: 50000,
-    theme: THEME,
+    // A terminal made while a background is set has to be see-through from the
+    // start. `applyBackground` only reaches the terminals that already exist,
+    // and a new one opened afterwards would otherwise be the single opaque
+    // rectangle in a window where every other terminal shows the picture.
+    allowTransparency: !!background,
+    theme: background ? { ...THEME, background: "rgba(0, 0, 0, 0)" } : THEME,
     // Leave colours exactly as the program asked for them. Anything above 1
     // lets xterm.js quietly lighten or darken text to hit a contrast target,
     // which means the colour on screen is not the colour that was sent.
@@ -957,6 +1179,15 @@ const RESIZE_QUIET_MS = 400;
 const STARTUP_SETTLE_MS = 1200;
 const startedAt = performance.now();
 
+/**
+ * Whether the window has finished arriving at its size.
+ *
+ * Until it has, no native browser is placed at all — see `pushBrowserBounds`.
+ * The columns are still moving, and a webview put over a rectangle taken while
+ * they are is a page left hanging outside the window.
+ */
+let layoutReady = false;
+
 /** How long to wait before telling the pty, given how long we have been up. */
 function resizeQuiet() {
   return performance.now() - startedAt < STARTUP_SETTLE_MS
@@ -1009,6 +1240,18 @@ function preservingView(entry, change) {
       // scrollback, and there is nowhere left to go back to.
       if (anchor.line >= 0) entry.term.scrollToLine(anchor.line);
       anchor.dispose();
+    } else {
+      // Being at the bottom has to be restored too.
+      //
+      // There is no marker for it, because the bottom is not a line — it is
+      // wherever the last one ends up, and a reflow moves that. Doing nothing
+      // here relied on xterm keeping the viewport pinned through a resize,
+      // which it does not quite: a rewrap that changes the total row count
+      // leaves the view a few rows short, so the prompt you were typing at
+      // sits just above the fold. It was survivable when a fit happened on a
+      // splitter drag and is not now that one happens whenever the box
+      // changes at all.
+      entry.term.scrollToBottom();
     }
   }
 }
@@ -1248,11 +1491,16 @@ async function toggleBrowser() {
   entry.browserOpen = !entry.browserOpen;
 
   // Opening a panel with no pages in it needs one to show.
+  //
+  // It opens either way. This used to give up and leave `browserOpen` false
+  // when no page could be had, which happens as soon as the browser pool is
+  // spoken for — and the pool is twelve for the whole window, so a few
+  // terminals with a few tabs each reach it easily. The button then did
+  // nothing at all, with no panel and no reason given, which reads as a broken
+  // button rather than as a limit. The panel is the user's to open; the note
+  // inside it is where "there is no browser free" belongs.
   if (entry.browserOpen && !tabsOf(entry).length) {
-    if (!(await addTab(entry))) {
-      entry.browserOpen = false;
-      return;
-    }
+    await addTab(entry);
   }
 
   // Closing puts the bar away too, so the next browser opens as bare as the
@@ -1550,6 +1798,40 @@ function closeRowMenu() {
  * the rail is rebuilt from scratch on every repaint and a menu parented to a
  * row would vanish underneath the pointer the next time a status changed.
  */
+/**
+ * Terminals held at the top of the rail, by id.
+ *
+ * In local storage rather than the session file, and by id rather than by
+ * name, because pinning is about this window's list and not about the shell:
+ * it says where you want to find something, which is a fact about the rail.
+ *
+ * The ids come from the daemon and are reused after a reboot, so a stale pin
+ * can land on a terminal that is not the one that was pinned. That is a wrong
+ * row near the top of a list, which costs a right-click to undo, and the
+ * alternative — dropping every pin whenever the daemon restarts — costs them
+ * all every time. The cheaper mistake wins.
+ */
+const PINNED_KEY = "mux.pinned";
+const pinned = new Set(
+  (() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(PINNED_KEY) || "[]");
+      return Array.isArray(raw) ? raw.filter((n) => Number.isInteger(n)) : [];
+    } catch {
+      return [];
+    }
+  })()
+);
+
+function togglePinned(id) {
+  if (pinned.has(id)) pinned.delete(id);
+  else pinned.add(id);
+  try {
+    localStorage.setItem(PINNED_KEY, JSON.stringify([...pinned]));
+  } catch {}
+  refresh();
+}
+
 function openRowMenu(id, x, y) {
   const entry = terminals.get(id);
   if (!entry) return;
@@ -1578,6 +1860,8 @@ function openRowMenu(id, x, y) {
     const label = row && row.querySelector(".name");
     if (label) beginRename(id, label);
   });
+
+  item(pinned.has(id) ? "Unpin" : "Pin to top", () => togglePinned(id));
 
   item(entry.browserOpen ? "Hide browser" : "Show browser", async () => {
     await selectTerminal(id);
@@ -1623,9 +1907,18 @@ function renderButtons() {
   );
 
   const needle = filterText.trim().toLowerCase();
-  const shown = needle
+  const matching = needle
     ? infos.filter((i) => displayName(i).toLowerCase().includes(needle))
     : infos;
+
+  // Pinned first, and otherwise in the order the daemon lists them.
+  //
+  // A stable sort, so within each group nothing moves: the daemon's order is
+  // the order terminals were started, and a rail that reshuffled itself for
+  // any other reason would cost you the muscle memory of where each one sits.
+  const shown = [...matching].sort(
+    (a, b) => (pinned.has(b.id) ? 1 : 0) - (pinned.has(a.id) ? 1 : 0)
+  );
 
   // Rows are updated in place, never rebuilt.
   //
@@ -1676,7 +1969,10 @@ function renderButtons() {
       existing.set(key, row);
     }
 
-    row.className = "term-btn" + (info.id === activeId ? " active" : "");
+    row.className =
+      "term-btn" +
+      (info.id === activeId ? " active" : "") +
+      (pinned.has(info.id) ? " pinned" : "");
 
     const label = displayName(info);
     if (name.textContent !== label) name.textContent = label;
@@ -1792,7 +2088,21 @@ function pushBrowserBounds(force = false) {
   // Which page is over the slot is a tab, not a terminal: a terminal may have
   // several, and only one of them is the one you are looking at.
   const entry = activeId === null ? null : terminals.get(activeId);
-  const showing = entry && entry.browserOpen ? activeTab(entry) : null;
+  let showing = entry && entry.browserOpen ? activeTab(entry) : null;
+
+  // Nothing is placed until the window has stopped deciding how big it is.
+  //
+  // Opening one is three layouts in quick succession — built, sized, then
+  // restored to the size it was last left at — and a native webview put over a
+  // rectangle measured during any of them is a page hanging off the side of
+  // the window until something moves. It cannot be clipped, so it is not a
+  // stray pixel at the edge: it is a white panel across the desktop, and it
+  // was the first thing you saw on every launch.
+  //
+  // Parked rather than skipped. Returning early would leave whichever page was
+  // last placed sitting where it was, which is the same problem with an older
+  // rectangle.
+  if (!layoutReady) showing = null;
 
   invoke("browser_layout", {
     active: showing ? showing.id : null,
@@ -2505,6 +2815,10 @@ async function main() {
   restorePanelWidths();
   fitPanelsToWindow();
   applyMirror();
+  // Awaited, and before any terminal is made: a terminal is constructed either
+  // see-through or not, so this has to be known first or the ones restored at
+  // startup come back opaque over the picture.
+  await loadBackground();
   // Not awaited: only the profile menu wants it, and that cannot be open yet.
   loadAccountName();
   document.getElementById("err-close").onclick = () => (els.err.hidden = true);
@@ -2711,9 +3025,30 @@ async function main() {
         28,
         Math.max(8, fontSizeFor(activeId) + (e.deltaY < 0 ? 1 : -1))
       );
+      // Whether you were at the end, read before anything changes.
+      //
+      // Changing the font size is not one reflow. xterm recalculates the cell
+      // dimensions, the fit that follows changes the column count, and the
+      // rewrap those cause finishes after this handler has returned. Anything
+      // that asks "are we at the bottom" partway through that gets the answer
+      // for a layout that is already gone, and `preservingView` then faithfully
+      // holds a position nobody chose — which is the view jumping half a screen
+      // up on every notch of the wheel.
+      const buffer = entry.term.buffer.active;
+      const wasAtBottom = buffer.viewportY >= buffer.baseY;
+
       rememberFontSize(activeId, size);
       entry.term.options.fontSize = size;
       syncSize(activeId);
+
+      if (wasAtBottom) {
+        // Twice: once for the frame the fit lands in, and once after the
+        // rewrap that follows it. The second is what actually holds, and the
+        // first is what stops the view visibly leaving and coming back.
+        const pin = () => entry.term.scrollToBottom();
+        requestAnimationFrame(pin);
+        setTimeout(pin, 60);
+      }
     },
     { passive: false, capture: true }
   );
@@ -2762,7 +3097,13 @@ async function main() {
     }
   };
   requestAnimationFrame(settle);
-  setTimeout(settle, STARTUP_SETTLE_MS + 200);
+  setTimeout(() => {
+    settle();
+    // The window is where it is going to be, so a page can finally be put over
+    // the slot without landing outside it.
+    layoutReady = true;
+    pushBrowserBounds(true);
+  }, STARTUP_SETTLE_MS + 200);
 
   try {
     maximized = await invoke("window_is_maximized");

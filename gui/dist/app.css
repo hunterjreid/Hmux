@@ -15,9 +15,18 @@
        editor.foreground                #c5c8c6
        focusBorder                      #3655b5
   */
-  --bg: #1e1e1e;
-  --rail: #272727;
-  --panel: #1e1e1e;
+  /* Dropped as a scale, not one value at a time.
+   *
+   * These started as Monokai Dimmed's own greys so a shell here and a shell in
+   * the editor matched. That mattered for the sixteen ANSI colours, which are
+   * still exactly the theme's — but it never had to govern the chrome, and the
+   * theme's chrome is a light-grey-on-dark editor sidebar, which around a
+   * terminal reads as a pale frame. Everything below is a step down from what
+   * the theme specifies, keeping the same intervals between them so the
+   * hierarchy is unchanged and only the floor moved. */
+  --bg: #0c0c0c;
+  --rail: #131313;
+  --panel: #0c0c0c;
   /* The browser is a different kind of thing from the terminal and now says so.
      It used to be the same black on the grounds that opening one should not
      look like opening a different program — but the two sit edge to edge with
@@ -25,13 +34,20 @@
      indistinguishable from a terminal with nothing in it. Same shade as the
      rail: everything that is the app is this colour, and the terminal is the
      only thing that is not. */
-  --browser: #272727;
-  --chrome: #353535;
-  --elev: #3c3c3c;
-  --elev-hi: #4e4e4e;
-  --row-hover: #3a3a3a;
-  --row-active: #4e4e4e;
-  --line: #3a3a3a;
+  --browser: #131313;
+  /* The title bar, and the one surface that did not come down with the rest.
+   *
+   * Everything else went near-black; this stayed a grey. It is the window's
+   * frame — there is no OS caption above it, so it is the only thing standing
+   * between the app and the desktop, and at #1a1a1a it stopped reading as an
+   * edge and the window lost its outline against a dark wallpaper. A frame is
+   * allowed to be lighter than what it frames. */
+  --chrome: #262626;
+  --elev: #232323;
+  --elev-hi: #2f2f2f;
+  --row-hover: #1e1e1e;
+  --row-active: #2a2a2a;
+  --line: #212121;
   --hair: rgba(255, 255, 255, 0.07);
 
   /* One easing and two durations for the whole app, so nothing moves at a
@@ -73,8 +89,37 @@
 
   /* Matches the xterm theme's background exactly, so the padding around the
      terminal is the terminal rather than a frame in a slightly different
-     black. Changing one means changing THEME.background in app.js. */
-  --term-bg: #1e1e1e;
+     black. Changing one means changing THEME.background in app.js.
+
+     Below the rail rather than level with it: the terminal is the only surface
+     here that is not the application, and being a shade under everything
+     around it is what makes it read as a hole in the window rather than one
+     more panel of it.
+
+     This exact value is also the near-black the shipped dither backgrounds
+     were drawn against, so the scrim dims toward the colour their own dark
+     areas already are and a picture meets the terminal with no seam. */
+  --term-bg: #0e0e0e;
+
+  /* An image behind the terminal, when there is one. Empty by default, so
+     `background-image: var(--term-image)` resolves to nothing and the flat
+     colour above shows through. Set from the settings menu; see
+     `applyBackground` in app.js. */
+  --term-image: none;
+  /* How much of the image is dimmed away, as the opacity of a scrim in
+     --term-bg laid over it.
+
+     Only the default. `applyBackground` overwrites it from the stored choice,
+     because the right value depends entirely on the picture: this started at
+     0.92, which on the shipped image — already near-black and deliberately low
+     contrast — produced a four-level spread between #14 and #18. Not subtle,
+     invisible. A scrim tuned for a bright photograph erases a dark one, and
+     nothing in the stylesheet can know which it is dealing with, so it is a
+     setting rather than a constant.
+
+     The ANSI colours are untouched at every level, because the scrim is under
+     the glyphs and never over them. */
+  --term-image-dim: 0.82;
 }
 
 * {
@@ -150,9 +195,27 @@ body {
    Collapsed rather than `display: none`, because a panel that is not there
    has no width to animate from: it would appear at full size the instant the
    class came off, which is the jump this transition exists to remove. Nothing
-   shows at zero width as long as the panel clips what is inside it. */
+   shows at zero width as long as the panel clips what is inside it.
+
+   EVERY STATE BELOW MUST KEEP THIS EXACT TRACK SHAPE:
+
+     minmax(0, <len>)  <len>  minmax(220px, 1fr)  <len>  minmax(0, <len>)
+
+   and vary only the lengths. Grid track lists interpolate track by track, and
+   only between the same kind of track — `0` and `minmax(0, 460px)` are not the
+   same kind, so a single mismatched track anywhere in the list drops the whole
+   list to a discrete swap. That is not a subtle degradation: a discrete
+   transition holds the start value for no frames at all and reports the end
+   value from the first, so the panel arrives at full width instantly while the
+   4px splitter beside it — plain length to plain length, so still
+   interpolable — eases in over the full 260ms. The transition was declared,
+   created, and doing nothing.
+
+   This rule used to read `var(--rail-w) 4px 1fr 0 0`, which mismatched three of
+   the five tracks against the open state. */
 .app.browser-closed {
-  grid-template-columns: var(--rail-w) 4px 1fr 0 0;
+  grid-template-columns:
+    minmax(0, var(--rail-w)) 4px minmax(220px, 1fr) 0px minmax(0, 0px);
 }
 
 /* ---------- swapped sides ----------
@@ -172,8 +235,10 @@ body {
     minmax(0, var(--browser-w)) 4px minmax(220px, 1fr) 4px minmax(0, var(--rail-w));
 }
 
+/* Same track shape as every other state - see .app.browser-closed. */
 .app.mirrored.browser-closed {
-  grid-template-columns: 0 0 minmax(220px, 1fr) 4px var(--rail-w);
+  grid-template-columns:
+    minmax(0, 0px) 0px minmax(220px, 1fr) 4px minmax(0, var(--rail-w));
 }
 
 
@@ -282,7 +347,6 @@ body {
   align-items: center;
   gap: 2px;
   padding: 0 6px 0 14px;
-  border-right: 1px solid var(--hair);
 }
 
 .tb-brand {
@@ -362,20 +426,32 @@ body {
 
 /* ---------- splitters ---------- */
 
+/* The same colour as the rail it sits against, so the two read as one surface
+   with the terminal cut out of it rather than as a gap between two panels. */
 .split {
   grid-row: 2;
-  background: transparent;
+  background: var(--rail);
   cursor: col-resize;
-  transition: background var(--med) var(--ease);
 }
-.split:hover,
-.split.dragging {
-  background: var(--accent);
-}
+/* The divider never changes colour, for anything.
+ *
+ * It lit up in the accent on hover, which was a lot of blue for a four pixel
+ * gap you were usually only crossing on the way somewhere else. Toning that
+ * down to a grey on drag was still an answer to a question nobody asked: the
+ * `col-resize` cursor already says the thing can be dragged, and while you are
+ * dragging it the panel moving under your hand is the feedback. A strip that
+ * changes colour is one more thing moving on screen for no information. */
 
+/* No rule between the rail and the terminal.
+ *
+ * There was a hairline here to separate them, from when the two were a step
+ * apart on Monokai's greys and needed the help. They are further apart now and
+ * the terminal is the darkest thing in the window, so the edge is already
+ * unmistakable — and a lit line drawn over it stopped reading as a boundary
+ * and started reading as a stray border down the middle of the window. Two
+ * surfaces that already differ do not need a third thing between them. */
 #split-term {
   grid-column: 2;
-  border-left: 1px solid var(--hair);
 }
 #split-browser {
   grid-column: 4;
@@ -527,16 +603,27 @@ body {
  * nesting one button inside another. */
 .term-btn {
   display: grid;
-  /* The right-hand column is held open whether or not anything is in it.
-     Sizing it to its contents means the name column widens the moment a
-     terminal goes quiet and narrows again the moment it does not, so a row
-     you are typing in shuffles its own label back and forth. The gutter is
-     the price of a rail that holds still. */
-  /* The reserved column scales too, or the dots outgrow the gutter held open
-     for them and get squeezed against the name. */
-  grid-template-columns: 1fr 1.23em;
+  /* The right-hand column exists only when something is in it.
+   *
+   * It used to be held open on every row for a spinner that is absent almost
+   * all of the time — the gutter plus its gap is about thirty pixels at a
+   * comfortable rail size, and every name was clipped that much early with
+   * visibly empty space after the ellipsis. The reason given was that sizing
+   * the column to its contents makes the name jump when a terminal goes quiet,
+   * which is true, and is a real cost paid at the moment a state changes. It
+   * was being paid permanently instead, by every idle row, to avoid it.
+   *
+   * So the gutter opens for the rows that need it, and the change is eased
+   * rather than snapped, which is what the jump actually was. `BUSY_HOLD_MS`
+   * already keeps the dots up through the gaps in a busy terminal's output, so
+   * this cannot flicker on a row that is working — it moves once when work
+   * starts and once when it stops. */
+  grid-template-columns: 1fr 0;
   align-items: center;
-  gap: 0 calc(5px + 0.3em);
+  gap: 0;
+  transition: grid-template-columns var(--med) var(--ease),
+    column-gap var(--med) var(--ease), background var(--fast) var(--ease),
+    border-color var(--fast) var(--ease), color var(--fast) var(--ease);
   width: 100%;
   /* Scales with the rail's text rather than sitting at a fixed 36px, or
      zooming out only makes the words smaller inside rows that stay the same
@@ -554,8 +641,15 @@ body {
   text-align: left;
   cursor: pointer;
   outline: none;
-  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
-    color var(--fast) var(--ease);
+}
+
+/* The gutter, only for a row that has something to put in it. `.state` is
+   added and removed by `updateRightSlot`, so its presence is the whole of the
+   condition. The width scales with the rail, or the dots outgrow the space
+   held for them and get squeezed against the name. */
+.term-btn:has(.state) {
+  grid-template-columns: 1fr 1.23em;
+  column-gap: calc(5px + 0.3em);
 }
 
 .term-btn:hover {
@@ -570,6 +664,34 @@ body {
 .term-btn.active {
   background: var(--row-active);
   color: var(--text);
+}
+
+/* Pinned, marked on the leading edge rather than with an icon.
+ *
+ * A pin glyph would want the right-hand gutter, which is the spinner's and is
+ * held shut on every row that is not working — and a name is already clipped
+ * by whatever sits beside it. A bar on the edge the rows align to costs no
+ * width at all and reads down a column at a glance, which is the only place
+ * this information is ever used.
+ *
+ * On the padding rather than as a border, so the row's box is unchanged and a
+ * pinned row does not sit a pixel off from the rest. */
+.term-btn.pinned {
+  background-image: linear-gradient(
+    to right,
+    var(--accent) 0 2px,
+    transparent 2px
+  );
+  background-repeat: no-repeat;
+}
+
+/* The rail can be flipped, and the leading edge goes with it. */
+.app.mirrored .term-btn.pinned {
+  background-image: linear-gradient(
+    to left,
+    var(--accent) 0 2px,
+    transparent 2px
+  );
 }
 
 .term-btn .name {
@@ -964,6 +1086,65 @@ body {
   position: relative;
 }
 
+/* ---------- a picture behind the terminal ---------- */
+/*
+ * Only when there is one: `.has-bg` is set by `applyBackground`, so a window
+ * with no background pays for none of this and xterm keeps its opaque
+ * fast path.
+ */
+.app.has-bg .term-host {
+  background-image: var(--term-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* A generated pattern repeats at its own size instead of being stretched.
+   Scaling a dither to cover the pane magnifies its dots into blobs, which
+   throws away the only thing that made it a dither. */
+.app.has-bg.bg-tiled .term-host {
+  background-size: 320px 320px;
+  background-position: top left;
+  background-repeat: repeat;
+}
+
+/* The scrim, in the terminal's own colour.
+ *
+ * Dimming the image rather than fading the text: the glyphs are drawn above
+ * this and keep their full contrast, so the palette is untouched and only the
+ * picture loses its brightness. Doing it the other way round — a translucent
+ * terminal over a bright image — is what makes every screenshot of this idea
+ * unreadable. */
+.app.has-bg .term-host::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--term-bg);
+  opacity: var(--term-image-dim);
+  pointer-events: none;
+}
+
+/* The terminals are stacked in this box and would otherwise be painted under
+   the scrim along with the image.
+ *
+ * `z-index` only. Setting `position: relative` here as well looks harmless and
+ * is not: `.term-view` is `position: absolute; inset: 0`, so overriding the
+ * position took its insets with it, and every terminal stopped filling the
+ * host and collapsed to the height of its own text at the top of an empty
+ * pane. They are already positioned elements, which is all `z-index` needs. */
+.app.has-bg .term-host > * {
+  z-index: 1;
+}
+
+/* xterm paints its own opaque background over everything above unless it is
+   told the terminal is see-through. Both of these are set here rather than
+   only in the theme, because the viewport's colour is a stylesheet rule with
+   `!important` on it and the theme cannot reach it. */
+.app.has-bg .term-host .xterm-viewport,
+.app.has-bg .term-host .xterm-screen {
+  background-color: transparent !important;
+}
+
 .term-host .xterm {
   height: 100%;
 }
@@ -987,21 +1168,25 @@ body {
   background-color: var(--term-bg) !important;
 }
 
-/* The scrollbar.
+/* The scrollbar, on hover rather than always.
 
-   xterm draws its own rather than using the browser's, and hides it until you
-   scroll — which means a terminal that has been sitting there for a week shows
-   no sign of having anything above the prompt. A scrollbar says two things
-   before you touch it: how much is up there, and how far down you are. Both
-   are worth a permanent 10px.
+   It used to be pinned on at full opacity, on the argument that a scrollbar
+   says how much is above you and how far down you are before you touch it.
+   True, and not worth what it cost: on a terminal with a long history the
+   thumb is a short bar floating in the middle of an otherwise empty edge, with
+   nothing around it to say what it is. It read as a stray mark on the window.
 
-   The thumb's colour comes from the theme, next to the rest of the palette.
-   These rules are only about it being on screen at all: the engine swaps
-   between `.visible` and `.invisible`, and this holds both at full opacity. */
+   Reaching for it is when the answer is wanted, and reaching for it means the
+   pointer is over the terminal. It fades in then, and the eye is not asked to
+   ignore something the rest of the time. */
 .term-host .xterm-scrollable-element > .scrollbar {
-  opacity: 1 !important;
+  opacity: 0 !important;
   pointer-events: auto !important;
-  transition: none !important;
+  transition: opacity var(--med) var(--ease) !important;
+}
+
+.term-host:hover .xterm-scrollable-element > .scrollbar {
+  opacity: 1 !important;
 }
 
 /* The slider is sized and positioned by the engine through inline styles, so
@@ -1039,15 +1224,23 @@ body {
   background: transparent;
 }
 
+/* Matches the engine's own bar above: nothing until the pointer is over the
+   terminal. Transparent rather than hidden, so the 10px stays reserved and the
+   last column does not shift when it appears. */
 .term-host .xterm-viewport::-webkit-scrollbar-thumb {
   border-radius: 5px;
   border: 3px solid transparent;
   background-clip: content-box;
-  background-color: #4a4f58;
+  background-color: transparent;
+  transition: background-color var(--med) var(--ease);
+}
+
+.term-host:hover .xterm-viewport::-webkit-scrollbar-thumb {
+  background-color: #3a3f47;
 }
 
 .term-host .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background-color: #5e646f;
+  background-color: #4e545e;
 }
 
 /* Each terminal keeps its own xterm instance; only one is shown at a time.
@@ -1366,7 +1559,10 @@ body {
 
 /* Browsers come from a fixed pool; past that a terminal has none. */
 .browser-slot.empty::after {
-  content: "No browser left for this terminal — close another to free one.";
+  /* Tabs hold browsers, not terminals — a terminal with eight tabs is holding
+     eight of the twelve. Saying "close another terminal" sent people to shut
+     down a shell when closing one tab would have done it. */
+  content: "Every browser is in use. Close a tab in any terminal to free one.";
   display: block;
   padding: 24px;
   color: var(--muted);

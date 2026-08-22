@@ -70,6 +70,33 @@ fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Open a link in the machine's own browser, outside this window.
+///
+/// Almost nothing here should do this — a link clicked in a terminal belongs in
+/// that terminal's own panel, which is the whole argument for having a browser
+/// per terminal. The exceptions are the ones that are not about what you are
+/// working on: the project's own pages, reached from the menu. Those are not
+/// something you want taking over the panel beside a shell you are in the
+/// middle of using.
+///
+/// `rundll32 url.dll,FileProtocolHandler` rather than `cmd /c start`, which
+/// treats a quoted first argument as a window title and mangles URLs
+/// containing `&`.
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    // Only the web. This hands a string to the shell's protocol handlers, and
+    // the set of schemes Windows will act on includes several that run things.
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("only http and https links open outside the app".into());
+    }
+
+    std::process::Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", &url])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not open {url}: {e}"))
+}
+
 /// Who is running this, for the foot of the profile menu.
 ///
 /// The Windows account, because that is the only identity mux has. There is
@@ -179,6 +206,18 @@ fn save_layout(
 #[tauri::command]
 fn load_layout() -> persist::Layout {
     persist::load()
+}
+
+/// The picture behind the terminal, if one has been chosen.
+#[tauri::command]
+fn get_background() -> Option<String> {
+    persist::load_background()
+}
+
+/// Set it, or clear it by passing nothing.
+#[tauri::command]
+fn set_background(data: Option<String>) -> Result<(), String> {
+    persist::save_background(data.as_deref()).map_err(|e| format!("{e:#}"))
 }
 
 /// Start a terminal from a saved one: same shell, same directory, with the old
@@ -498,6 +537,7 @@ fn main() {
             ui_log,
             app_version,
             account_name,
+            open_external,
             window_minimize,
             window_toggle_maximize,
             window_is_maximized,
@@ -505,6 +545,8 @@ fn main() {
             window_start_drag,
             save_layout,
             load_layout,
+            get_background,
+            set_background,
             restore_terminal,
             update::update_stage,
             update::update_staged,

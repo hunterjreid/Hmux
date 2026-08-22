@@ -28,12 +28,22 @@
         <circle cx="6.2" cy="6.2" r="4" />
         <path d="M9.2 9.2 12 12" />
       </symbol>
-      <!-- A cog, drawn as a ring with teeth rather than a filled gear: the
-           icons here are all single-weight strokes and a solid one would read
-           as a different family. -->
-      <symbol id="i-gear" viewBox="0 0 16 16">
-        <circle cx="8" cy="8" r="2.4" />
-        <path d="M8 1.4v1.8M8 12.8v1.8M14.6 8h-1.8M3.2 8H1.4M12.7 3.3l-1.3 1.3M4.6 11.4l-1.3 1.3M12.7 12.7l-1.3-1.3M4.6 4.6 3.3 3.3" />
+      <!-- The lobed gear, the same one Cryptoflip uses, rather than the ring
+           with spokes that was here. A ring with eight ticks around it reads
+           as a loading indicator at sixteen pixels; the lobed outline is the
+           shape people already know means settings. -->
+      <!--
+        Its own stroke width, because it is the only symbol here on a 24-unit
+        grid rather than a 16-unit one. `.ico` sets 1.4 for the whole set,
+        which is about 1.2 device pixels at the 16 the others use and only 0.8
+        at 24 — so this came out visibly thinner and greyer than every icon
+        beside it, and the lobes turned to mush. 2 at this scale lands on the
+        same weight, which is also Lucide's own default for the grid it drew
+        this on.
+      -->
+      <symbol id="i-gear" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="3" stroke-width="2" />
+        <path stroke-width="2" d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" />
       </symbol>
       <!-- A divider with the two halves leaving it in opposite directions:
            what the button does, rather than a left-right arrow, which would

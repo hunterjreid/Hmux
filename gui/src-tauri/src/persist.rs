@@ -77,6 +77,54 @@ pub fn path() -> PathBuf {
     directory().join("session.json")
 }
 
+/// The picture behind the terminal, held as a data URL.
+///
+/// Beside the session rather than in the webview's local storage, which is
+/// quota'd at a few megabytes and would refuse a photograph — and refuse it by
+/// throwing part way through a setter, so the failure reads as the setting not
+/// sticking rather than as the file being too big.
+///
+/// A data URL rather than a path to the original, because the original can be
+/// moved or deleted and a background that disappears when you tidy your
+/// pictures folder is a background you cannot rely on.
+fn background_path() -> PathBuf {
+    directory().join("background.txt")
+}
+
+pub fn load_background() -> Option<String> {
+    std::fs::read_to_string(background_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Save a background, or remove it when given nothing.
+pub fn save_background(data: Option<&str>) -> Result<()> {
+    let path = background_path();
+    let Some(data) = data.map(str::trim).filter(|d| !d.is_empty()) else {
+        // Already absent is the outcome asked for, not a failure.
+        match std::fs::remove_file(&path) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e).with_context(|| format!("could not remove {}", path.display())),
+        }
+    };
+
+    // Only ever an image, and only ever inline. A `data:` URL of some other
+    // type would be pasted straight into a CSS `url()`, and the one thing that
+    // must not be reachable from there is a scheme that fetches.
+    if !data.starts_with("data:image/") {
+        anyhow::bail!("a background has to be an image");
+    }
+
+    let dir = directory();
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("could not create {}", dir.display()))?;
+    std::fs::write(&path, data)
+        .with_context(|| format!("could not write {}", path.display()))?;
+    Ok(())
+}
+
 /// Write the session out, replacing whatever was there.
 ///
 /// Through a temporary file and a rename, because this runs on a timer: a save

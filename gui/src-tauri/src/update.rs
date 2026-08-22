@@ -135,16 +135,27 @@ pub fn update_apply(app: tauri::AppHandle) -> Result<(), String> {
         return Err("there is nothing staged to install".into());
     }
 
+    // Distinct per run, so a binary moved aside can never land on one that is
+    // still there from last time.
+    //
+    // The fixed name `<binary>.old` looked fine and failed on the second
+    // update: the sweep cannot delete a file the previous daemon is still
+    // executing, and a rename cannot overwrite one either, so the update fell
+    // over on its own leftovers rather than on anything to do with the new
+    // build. Nothing else can be holding a name with this in it.
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+
     for name in &ready {
         let live = dir.join(name);
         let new = staged.join(name);
+        let aside = dir.join(format!("{name}.{stamp}.old"));
 
         // Move the current one aside if it is there. This succeeds whether or
         // not it is running, which is the property the whole design rests on.
         if live.exists() {
-            let aside = dir.join(format!("{name}.old"));
-            // A leftover from an earlier update whose process has since exited.
-            let _ = std::fs::remove_file(&aside);
             std::fs::rename(&live, &aside).map_err(|e| {
                 format!("could not move {} aside: {e}", live.display())
             })?;
@@ -155,7 +166,6 @@ pub fn update_apply(app: tauri::AppHandle) -> Result<(), String> {
         // under the real name.
         if let Err(e) = std::fs::rename(&new, &live) {
             // Put back what was moved, or the app has no executable at all.
-            let aside = dir.join(format!("{name}.old"));
             let _ = std::fs::rename(&aside, &live);
             return Err(format!("could not install {}: {e}", live.display()));
         }
