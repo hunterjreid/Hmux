@@ -27,6 +27,7 @@ const els = {
   browserPanel: document.getElementById("browser-panel"),
   browserBar: document.getElementById("browser-bar"),
   browserBtn: document.getElementById("browser-btn"),
+  railBtn: document.getElementById("rail-btn"),
   settingsBtn: document.getElementById("settings-btn"),
   settingsMenu: document.getElementById("settings-menu"),
   browserProgress: document.getElementById("browser-progress"),
@@ -406,6 +407,32 @@ function openSettings() {
 
 function closeSettings() {
   els.settingsMenu.hidden = true;
+}
+
+/**
+ * Whether the terminal list is put away.
+ *
+ * Its own preference, kept beside the others, because it is about this window
+ * rather than about what is running in it.
+ */
+const RAIL_KEY = "mux.railClosed";
+let railClosed = localStorage.getItem(RAIL_KEY) === "1";
+
+function applyRail() {
+  els.app.classList.toggle("rail-closed", railClosed);
+  els.railBtn.classList.toggle("on", !railClosed);
+  // The middle column just changed width, so the terminals need refitting and
+  // the browser needs telling where its hole went.
+  requestAnimationFrame(() => {
+    pushBrowserBounds(true);
+    if (activeId !== null) syncSize(activeId);
+  });
+}
+
+function toggleRail() {
+  railClosed = !railClosed;
+  localStorage.setItem(RAIL_KEY, railClosed ? "1" : "0");
+  applyRail();
 }
 
 function toggleMirror() {
@@ -2212,6 +2239,7 @@ async function main() {
     // you would have had to click anyway.
     openAddressBar();
   };
+  els.railBtn.onclick = toggleRail;
   els.settingsBtn.onclick = (e) => {
     // Or the document listener below would shut it again on the way past.
     e.stopPropagation();
@@ -2226,6 +2254,7 @@ async function main() {
   restorePanelWidths();
   fitPanelsToWindow();
   applyMirror();
+  applyRail();
   document.getElementById("err-close").onclick = () => (els.err.hidden = true);
 
   // mux has a browser in it, so the release notes can open beside the terminal
