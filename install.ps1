@@ -27,7 +27,11 @@ $ErrorActionPreference = 'Stop'
 
 $Repo       = 'hunterjreid/mux'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'mux'
-$Binaries   = @('mux-gui.exe', 'mux.exe')
+# mux-daemon is not optional. It owns the terminals; the two front ends are
+# views onto it. An install without it is a window that cannot open a shell,
+# and it fails at the point you click New rather than at startup, so it does
+# not look like a missing file - it looks like the app is broken.
+$Binaries   = @('mux-gui.exe', 'mux.exe', 'mux-daemon.exe')
 
 function Write-Step($text) { Write-Host "  $text" }
 function Fail($text) {
