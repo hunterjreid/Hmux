@@ -7,9 +7,20 @@ edition = "2024"
 [workspace]
 members = ["gui/src-tauri"]
 
+[[bin]]
+name = "mux"
+path = "src/main.rs"
+
+# The process that outlives the window. See src/daemon.rs.
+[[bin]]
+name = "mux-daemon"
+path = "src/bin/mux-daemon.rs"
+
 [dependencies]
 anyhow = "1.0.104"
 portable-pty = "0.9.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 unicode-width = "0.2.2"
 vte = "0.15.0"
 windows-sys = { version = "0.61.2", features = [
@@ -22,4 +33,12 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Threading",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_LibraryLoader",
+    # The daemon's front door: a named pipe, one instance per connected client.
+    "Win32_System_Pipes",
+    "Win32_Security",
+    # Right-click copy and paste. The webview's own clipboard API refuses
+    # whenever the calling document is not focused; see src/clipboard.rs.
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
 ] }

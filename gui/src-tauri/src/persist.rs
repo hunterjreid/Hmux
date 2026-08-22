@@ -3,9 +3,13 @@
 //! The shells themselves do not survive quitting — panes outlive *switching*,
 //! not the process exiting, and real detach needs a daemon that owns the ptys.
 //! What can survive is everything around them: which terminals you had, what
-//! you called them, the directory each was working in, and what they had
-//! printed. Restoring that puts you back where you left off rather than at a
-//! bare prompt, which is most of what "where I left off" means in practice.
+//! you called them, the directory each was working in, how wide each one was,
+//! and the text it was showing. Restoring that puts you back where you left
+//! off rather than at a bare prompt, which is most of what "where I left off"
+//! means in practice.
+//!
+//! The text is the terminal's own buffer, serialized by the UI — the screen as
+//! it was drawn, not the pty stream that drew it. See `save_layout`.
 //!
 //! Written to `%APPDATA%\mux\session.json`.
 
@@ -14,9 +18,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// Scrollback kept per terminal. The live backlog is larger; this is what is
-/// worth writing to disk on every autosave.
-const SAVED_SCROLLBACK: usize = 128 * 1024;
+/// Scrollback kept per terminal, in bytes.
+///
+/// A backstop rather than the real limit: the UI serializes a fixed number of
+/// lines, and this only catches the case where those lines are enormous. Set
+/// well above what three thousand ordinary lines come to, because every byte
+/// under it is a line you get back.
+const SAVED_SCROLLBACK: usize = 1024 * 1024;
 
 /// One terminal, as it was when the app last closed.
 ///
@@ -32,8 +40,23 @@ pub struct SavedTerminal {
     pub shell: String,
     pub cwd: Option<String>,
     pub scrollback: String,
+    /// The size the scrollback was drawn at. Serialized text is a grid, and a
+    /// grid put back at a different width wraps in different places.
+    pub cols: u16,
+    pub rows: u16,
     pub browser_open: bool,
     pub url: String,
+    /// Every page that was open beside this terminal, in strip order.
+    ///
+    /// Defaulted so a session written before tabs existed still loads: it comes
+    /// back with no tabs and the single `url` above, which is exactly what it
+    /// had.
+    #[serde(default)]
+    pub tabs: Vec<String>,
+    /// Which of them was on top, as an index. Not an id: tab ids only mean
+    /// anything to the window that handed them out.
+    #[serde(default)]
+    pub active_tab: usize,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -89,6 +112,11 @@ pub fn load() -> Layout {
 }
 
 /// Trim scrollback to what is worth persisting, keeping the end.
+///
+/// Cut at a line break rather than at the byte the limit lands on. The text is
+/// full of escape sequences, and a cut through the middle of one leaves the
+/// terminal reading the tail of it as characters to print — a line of stray
+/// digits and brackets across the top of a restored session.
 pub fn trim_scrollback(text: &str) -> String {
     if text.len() <= SAVED_SCROLLBACK {
         return text.to_string();
@@ -97,7 +125,13 @@ pub fn trim_scrollback(text: &str) -> String {
     while start < text.len() && !text.is_char_boundary(start) {
         start += 1;
     }
-    text[start..].to_string()
+    // The line the cut lands in is partial in both senses; drop it. Falls back
+    // to the raw cut if the kept region is one enormous line with no break.
+    let from = text[start..]
+        .find('\n')
+        .map(|i| start + i + 1)
+        .unwrap_or(start);
+    text[from..].to_string()
 }
 
 /// The directory a shell's own prompt says it is in.
@@ -195,16 +229,19 @@ fn strip_escapes(text: &str) -> String {
 /// everything above is from a shell that is no longer running, and someone
 /// scrolls up expecting to be able to interact with it.
 ///
-/// The reset matters as much as the rule: a session that was inside a
-/// full-screen program when it closed left the alternate screen buffer on, and
-/// replaying that verbatim leaves the new terminal drawing into a screen the
-/// user cannot scroll.
+/// Nothing here moves the cursor. The replay leaves it where the old session
+/// had it — under the last prompt, which is where the next line belongs — and
+/// anything that repositions first lands the new shell on top of the text that
+/// was just restored. Switching screen buffers counts as repositioning: it
+/// restores the cursor from before an alternate screen that was never entered,
+/// which is the top of the terminal, and the new shell then overwrites the
+/// session from the first line down.
 pub fn restored_marker(cwd: Option<&Path>) -> String {
     let where_at = cwd
         .map(|p| format!(" · {}", p.display()))
         .unwrap_or_default();
     format!(
-        "\x1b[?1049l\x1b[0m\r\n\x1b[38;5;244m── restored{where_at} ── \
+        "\x1b[0m\r\n\x1b[38;5;244m── restored{where_at} ── \
          above is the previous session\x1b[0m\r\n"
     )
 }
@@ -251,11 +288,20 @@ mod tests {
 
     #[test]
     fn trimming_keeps_the_end_and_stays_on_a_character_boundary() {
-        let text = "é".repeat(200 * 1024);
+        let text = "é".repeat(SAVED_SCROLLBACK);
         let trimmed = trim_scrollback(&text);
         assert!(trimmed.len() <= SAVED_SCROLLBACK);
         assert!(text.ends_with(&trimmed));
         assert!(trimmed.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn trimming_cuts_at_a_line_break() {
+        // Otherwise the cut lands inside an escape sequence and the rest of it
+        // is printed as text at the top of the restored terminal.
+        let text = format!("{}\n\x1b[31mred\x1b[0m\n", "x".repeat(SAVED_SCROLLBACK));
+        let trimmed = trim_scrollback(&text);
+        assert_eq!(trimmed, "\x1b[31mred\x1b[0m\n");
     }
 
     #[test]
@@ -281,8 +327,15 @@ mod tests {
                 shell: "pwsh.exe".into(),
                 cwd: Some("C:\\work".into()),
                 scrollback: "output".into(),
+                cols: 120,
+                rows: 40,
                 browser_open: true,
                 url: "https://example.com/".into(),
+                tabs: vec![
+                    "https://example.com/".into(),
+                    "https://example.org/".into(),
+                ],
+                active_tab: 1,
             }],
         };
         let json = serde_json::to_string(&layout).unwrap();
@@ -290,7 +343,14 @@ mod tests {
         assert_eq!(back.active, Some(2));
         assert_eq!(back.terminals[0].name.as_deref(), Some("build"));
         assert_eq!(back.terminals[0].cwd.as_deref(), Some("C:\\work"));
+        assert_eq!(back.terminals[0].cols, 120);
+        assert_eq!(back.terminals[0].rows, 40);
         assert!(back.terminals[0].browser_open);
+        // Every page that was open, and which of them was on top. Reopening a
+        // window with one of several tabs is not reopening the session.
+        assert_eq!(back.terminals[0].tabs.len(), 2);
+        assert_eq!(back.terminals[0].tabs[1], "https://example.org/");
+        assert_eq!(back.terminals[0].active_tab, 1);
     }
 
     #[test]
@@ -302,11 +362,14 @@ mod tests {
     }
 
     #[test]
-    fn the_restored_marker_leaves_the_alternate_screen() {
-        // A session that closed inside a full-screen program would otherwise
-        // replay into a screen buffer the user cannot scroll out of.
+    fn the_restored_marker_never_moves_the_cursor() {
+        // The one that mattered was `?1049l`: leaving a screen buffer that was
+        // never entered puts the cursor back at the top of the terminal, and
+        // the restored session is then overwritten line by line by the shell
+        // that just started.
         let marker = restored_marker(None);
-        assert!(marker.contains("\x1b[?1049l"));
+        assert!(!marker.contains("1049"));
+        assert!(!marker.contains("\x1b[H"));
         assert!(marker.contains("restored"));
     }
 }

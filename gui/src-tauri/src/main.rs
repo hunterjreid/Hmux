@@ -24,12 +24,12 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use serde::Serialize;
 use tauri::{
-    webview::WebviewBuilder, window::WindowBuilder, Emitter, LogicalPosition, LogicalSize, Manager,
+    webview::WebviewBuilder, window::WindowBuilder, LogicalPosition, LogicalSize, Manager,
     WebviewUrl,
 };
 
+use mux::proto::SessionInfo;
 use sessions::{SessionId, Sessions};
 
 /// How often the process table is walked to refresh idle/busy badges. Fast
@@ -121,8 +121,12 @@ fn window_start_drag(app: tauri::AppHandle) -> Result<(), String> {
 /// Write the session out.
 ///
 /// The UI supplies what only it knows — which terminals exist, their order,
-/// what they were renamed to, and what each had beside it. Everything that
-/// needs the OS is filled in here.
+/// what they were renamed to, what each had beside it, and the text each one
+/// was showing. Everything that needs the OS is filled in here.
+///
+/// The text has to come from the UI: what this side holds is the pty stream,
+/// and that is a set of drawing instructions rather than a picture. Only the
+/// terminal that drew it knows what it ended up looking like.
 #[tauri::command]
 fn save_layout(
     state: tauri::State<'_, Mutex<sessions::Sessions>>,
@@ -135,7 +139,12 @@ fn save_layout(
                 continue;
             };
             terminal.shell = snapshot.shell;
-            terminal.scrollback = persist::trim_scrollback(&snapshot.scrollback);
+            // The raw stream only stands in when the UI could not serialize —
+            // a garbled restore still beats an empty one.
+            if terminal.scrollback.is_empty() {
+                terminal.scrollback = snapshot.scrollback;
+            }
+            terminal.scrollback = persist::trim_scrollback(&terminal.scrollback);
             // What the prompt says beats what the OS says: see
             // `persist::cwd_from_prompt` for why they disagree.
             terminal.cwd = persist::cwd_from_prompt(&terminal.scrollback)
@@ -162,7 +171,6 @@ fn load_layout() -> persist::Layout {
 #[tauri::command]
 fn restore_terminal(
     state: tauri::State<'_, Mutex<sessions::Sessions>>,
-    pool: tauri::State<'_, Mutex<browser::Pool>>,
     app: tauri::AppHandle,
     shell: Option<String>,
     cwd: Option<String>,
@@ -184,51 +192,27 @@ fn restore_terminal(
         )
     };
 
-    let id = {
-        let mut sessions = state.lock().map_err(|e| e.to_string())?;
-        sessions
-            .restore(&app, &shell, cwd, replay, cols, rows)
-            .map_err(|e| format!("{e:#}"))?
-    };
-
-    assign_browser(&pool, id);
-    Ok(id)
+    let mut sessions = state.lock().map_err(|e| e.to_string())?;
+    sessions
+        .restore(&app, &shell, cwd, replay, cols, rows)
+        .map_err(|e| format!("{e:#}"))
 }
 
-/// Claim one of the browsers built at startup.
-///
-/// Nothing is created here: making a webview once the event loop is running
-/// wedges the main thread, and the command that did it would never return.
-fn assign_browser(pool: &tauri::State<'_, Mutex<browser::Pool>>, id: SessionId) {
-    if let Ok(mut pool) = pool.lock() {
-        if pool.assign(id).is_none() {
-            log_error(&format!(
-                "terminal {id} gets no browser: all {} are in use",
-                browser::POOL_SIZE
-            ));
-        }
-    }
-}
+// Browsers are claimed by tabs, not by terminals. A terminal starting is no
+// longer a reason to take one: it might end up with four pages open beside it
+// or none at all, and which of those it is is the UI's to decide. See
+// `browser_claim`.
 
-#[derive(Clone, Serialize)]
-pub struct TerminalInfo {
-    pub id: SessionId,
-    pub title: String,
-    /// "idle", "exited", the running command, or "<command> · waiting".
-    pub status: String,
-    /// Actively producing output right now.
-    pub busy: bool,
-    /// A command is open, whether or not it is doing anything.
-    pub running: bool,
-    pub alive: bool,
-}
+// What the rail shows about a terminal is the daemon's own `SessionInfo`,
+// passed through untouched. There was a type here that restated it; the rail
+// reads four of its fields and the daemon already sends all four, so the
+// translation was a place for the two to disagree and nothing else.
 
 // ---- terminal commands ---------------------------------------------------
 
 #[tauri::command]
 fn create_terminal(
     state: tauri::State<'_, Mutex<Sessions>>,
-    pool: tauri::State<'_, Mutex<browser::Pool>>,
     app: tauri::AppHandle,
     shell: Option<String>,
     cols: u16,
@@ -237,15 +221,10 @@ fn create_terminal(
     // Defaults to the most colourful shell present, not cmd.exe.
     let shell = shell.unwrap_or_else(shells::default_program);
 
-    let id = {
-        let mut sessions = state.lock().map_err(|e| e.to_string())?;
-        sessions
-            .create(&app, &shell, cols, rows)
-            .map_err(|e| format!("{e:#}"))?
-    };
-
-    assign_browser(&pool, id);
-    Ok(id)
+    let mut sessions = state.lock().map_err(|e| e.to_string())?;
+    sessions
+        .create(&app, &shell, cols, rows)
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -278,40 +257,33 @@ fn resize_terminal(
 #[tauri::command]
 fn close_terminal(
     state: tauri::State<'_, Mutex<Sessions>>,
-    pool: tauri::State<'_, Mutex<browser::Pool>>,
-    app: tauri::AppHandle,
     id: SessionId,
 ) -> Result<(), String> {
+    // The browsers this terminal's tabs were holding are released by the UI,
+    // which is the only side that knows which tabs those were.
     state.lock().map_err(|e| e.to_string())?.close(id);
-
-    // Hand the browser back to the pool, and send it home first so the next
-    // terminal to claim this slot does not inherit the last one's page.
-    if let Ok(mut pool) = pool.lock() {
-        if let Some(slot) = pool.release(id) {
-            if let (Some(webview), Some(home)) =
-                (app.get_webview(&browser::slot_label(slot)), pool.home())
-            {
-                if let Ok(url) = home.parse::<tauri::Url>() {
-                    let _ = webview.navigate(url);
-                }
-            }
-        }
-    }
     Ok(())
 }
 
 /// Everything a terminal has produced so far, plus the sequence number that
 /// replay reaches — the caller uses it to drop live chunks already included.
+///
+/// Also what subscribes this window to the terminal's live output, which is why
+/// it is asked for even when the window already knows it has nothing.
 #[tauri::command]
 fn terminal_backlog(
     state: tauri::State<'_, Mutex<Sessions>>,
     id: SessionId,
 ) -> Result<sessions::Backlog, String> {
-    Ok(state.lock().map_err(|e| e.to_string())?.backlog(id))
+    state
+        .lock()
+        .map_err(|e| e.to_string())?
+        .attach(id)
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
-fn list_terminals(state: tauri::State<'_, Mutex<Sessions>>) -> Result<Vec<TerminalInfo>, String> {
+fn list_terminals(state: tauri::State<'_, Mutex<Sessions>>) -> Result<Vec<SessionInfo>, String> {
     Ok(state.lock().map_err(|e| e.to_string())?.info())
 }
 
@@ -319,6 +291,24 @@ fn list_terminals(state: tauri::State<'_, Mutex<Sessions>>) -> Result<Vec<Termin
 fn list_shells() -> Vec<shells::Shell> {
     shells::available()
 }
+
+// ---- clipboard -----------------------------------------------------------
+//
+// Not `navigator.clipboard`. That refuses whenever the calling document is not
+// focused, and this window is several webviews — a right click lands on one of
+// them and the refusal is asynchronous and silent, which reads as the paste
+// doing nothing at all. See `mux::clipboard`.
+
+#[tauri::command]
+fn clipboard_read() -> Result<String, String> {
+    mux::clipboard::read_text().map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn clipboard_write(text: String) -> Result<(), String> {
+    mux::clipboard::write_text(&text).map_err(|e| format!("{e:#}"))
+}
+
 
 // ---- browser panel commands ----------------------------------------------
 
@@ -332,33 +322,85 @@ fn list_shells() -> Vec<shells::Shell> {
 fn browser_layout(
     app: tauri::AppHandle,
     pool: tauri::State<'_, Mutex<browser::Pool>>,
-    active: Option<SessionId>,
+    active: Option<browser::TabId>,
     x: f64,
     y: f64,
     width: f64,
     height: f64,
+    force: Option<bool>,
 ) -> Result<bool, String> {
-    let slot = active.and_then(|id| pool.lock().ok().and_then(|p| p.slot_of(id)));
-    browser::layout(&app, slot, x, y, width, height);
+    let mut pool = pool.lock().map_err(|e| e.to_string())?;
+    // Set by the caller for the rare events — changing tab, changing terminal,
+    // opening the panel — where being right matters more than being cheap.
+    // The skip exists for the constant stream of identical layouts during a
+    // slide or a resize; trusting it when the user has actually changed what
+    // they are looking at is how a page ends up loaded but never placed, which
+    // reads as a panel that simply never filled in.
+    if force.unwrap_or(false) {
+        pool.forget_placement();
+    }
+    let slot = active.and_then(|tab| pool.slot_of(tab));
+    pool.layout(&app, slot, x, y, width, height);
     Ok(slot.is_some())
 }
 
-/// Look up a terminal's browser, or explain why it hasn't got one.
+/// Claim a browser for a tab. Idempotent: asking twice gives the same one.
+#[tauri::command]
+fn browser_claim(
+    pool: tauri::State<'_, Mutex<browser::Pool>>,
+    tab: browser::TabId,
+) -> Result<bool, String> {
+    let mut pool = pool.lock().map_err(|e| e.to_string())?;
+    let got = pool.assign(tab).is_some();
+    // A slot changing hands means the next layout must actually place it, even
+    // if the rectangle is identical to the one the previous tab was using.
+    pool.forget_placement();
+    Ok(got)
+}
+
+/// Hand a tab's browser back, and send it home so the next tab to claim that
+/// slot does not open on the last one's page.
+#[tauri::command]
+fn browser_release(
+    app: tauri::AppHandle,
+    pool: tauri::State<'_, Mutex<browser::Pool>>,
+    tab: browser::TabId,
+) -> Result<(), String> {
+    let mut pool = pool.lock().map_err(|e| e.to_string())?;
+    pool.forget_placement();
+    if let Some(slot) = pool.release(tab) {
+        if let (Some(webview), Some(home)) =
+            (app.get_webview(&browser::slot_label(slot)), pool.home())
+        {
+            if let Ok(url) = home.parse::<tauri::Url>() {
+                let _ = webview.navigate(url);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Look up a tab's browser, or explain why it hasn't got one.
 fn webview_for(
     app: &tauri::AppHandle,
     pool: &tauri::State<'_, Mutex<browser::Pool>>,
-    id: SessionId,
+    tab: browser::TabId,
 ) -> Result<tauri::Webview, String> {
-    let slot = pool
-        .lock()
-        .map_err(|e| e.to_string())?
-        .slot_of(id)
-        .ok_or_else(|| {
+    let pool = pool.lock().map_err(|e| e.to_string())?;
+    // Blaming the pool was wrong whenever it was not actually full, which was
+    // most of the time: a tab with no slot has usually never asked for one.
+    // Saying "all of them are in use" sends you looking for pages you do not
+    // have open.
+    let slot = pool.slot_of(tab).ok_or_else(|| {
+        if pool.is_full() {
             format!(
-                "terminal {id} has no browser (all {} are in use)",
+                "no browser left for this tab: all {} are open",
                 browser::POOL_SIZE
             )
-        })?;
+        } else {
+            format!("tab {tab} has not been given a browser")
+        }
+    })?;
     app.get_webview(&browser::slot_label(slot))
         .ok_or_else(|| format!("browser {slot} is missing"))
 }
@@ -367,14 +409,14 @@ fn webview_for(
 fn browser_navigate(
     app: tauri::AppHandle,
     pool: tauri::State<'_, Mutex<browser::Pool>>,
-    id: SessionId,
+    tab: browser::TabId,
     url: String,
 ) -> Result<String, String> {
     // An empty bar is not a request to go anywhere.
     let Some(full) = browser::normalise_url(&url) else {
         return Ok(String::new());
     };
-    let webview = webview_for(&app, &pool, id)?;
+    let webview = webview_for(&app, &pool, tab)?;
     let parsed: tauri::Url = full.parse().map_err(|_| format!("not a URL: {url}"))?;
     webview.navigate(parsed).map_err(|e| e.to_string())?;
     Ok(full)
@@ -387,7 +429,7 @@ fn browser_navigate(
 fn browser_history(
     app: tauri::AppHandle,
     pool: tauri::State<'_, Mutex<browser::Pool>>,
-    id: SessionId,
+    tab: browser::TabId,
     action: String,
 ) -> Result<(), String> {
     let script = match action.as_str() {
@@ -396,7 +438,7 @@ fn browser_history(
         "reload" => "location.reload()",
         other => return Err(format!("unknown history action: {other}")),
     };
-    let Ok(webview) = webview_for(&app, &pool, id) else {
+    let Ok(webview) = webview_for(&app, &pool, tab) else {
         return Ok(());
     };
     webview.eval(script).map_err(|e| e.to_string())
@@ -408,9 +450,9 @@ fn browser_history(
 fn browser_url(
     app: tauri::AppHandle,
     pool: tauri::State<'_, Mutex<browser::Pool>>,
-    id: SessionId,
+    tab: browser::TabId,
 ) -> Result<String, String> {
-    let Ok(webview) = webview_for(&app, &pool, id) else {
+    let Ok(webview) = webview_for(&app, &pool, tab) else {
         return Ok(String::new());
     };
     let url = webview.url().map(|u| u.to_string()).unwrap_or_default();
@@ -430,7 +472,11 @@ fn main() {
             terminal_backlog,
             list_terminals,
             list_shells,
+            clipboard_read,
+            clipboard_write,
             browser_layout,
+            browser_claim,
+            browser_release,
             browser_navigate,
             browser_history,
             browser_url,
@@ -446,6 +492,25 @@ fn main() {
             restore_terminal,
         ])
         .setup(|app| {
+            // Find the terminals before building anything to show them in.
+            //
+            // They are not ours: they belong to the daemon, and it is either
+            // already running with a session in it or needs starting. Failing
+            // here is worth surfacing rather than swallowing, because every
+            // terminal command below depends on it — but it is not worth
+            // refusing to open the window over, since the window is the only
+            // place the failure could be read.
+            if let Some(state) = app.try_state::<Mutex<Sessions>>() {
+                match state.lock() {
+                    Ok(mut s) => {
+                        if let Err(e) = s.connect(app.handle()) {
+                            log_error(&format!("could not reach the daemon: {e:#}"));
+                        }
+                    }
+                    Err(e) => log_error(&format!("session state was poisoned: {e}")),
+                }
+            }
+
             // No OS title bar: the app draws its own, which is what puts the
             // active terminal's name and the browser toggle up there instead
             // of a strip that only holds the window buttons. Resizing from the
@@ -491,49 +556,43 @@ fn main() {
             // repositioned by the UI, which recomputes its own layout.
             let resize_handle = window.clone();
             window.on_window_event(move |event| {
-                if let tauri::WindowEvent::Resized(new_size) = event {
-                    let Ok(scale) = resize_handle.scale_factor() else {
-                        return;
-                    };
-                    let logical = new_size.to_logical::<f64>(scale);
-                    if let Some(ui) = resize_handle.get_webview("ui") {
-                        let _ = ui.set_size(LogicalSize::new(logical.width, logical.height));
-                    }
+                if !matches!(event, tauri::WindowEvent::Resized(_)) {
+                    return;
+                }
+                // The window is asked how big it is, rather than the event
+                // being believed.
+                //
+                // Maximising fires several of these in a burst and they do not
+                // all carry the size the window ended up at — take one at face
+                // value and the chrome is left at a size the window has already
+                // stopped being, which is a strip of empty desktop down the
+                // side of the app with everything drawn into the wrong half.
+                // Asking cannot be stale by the time it is answered.
+                let Ok(size) = resize_handle.inner_size() else {
+                    return;
+                };
+                let Ok(scale) = resize_handle.scale_factor() else {
+                    return;
+                };
+                let logical = size.to_logical::<f64>(scale);
+                if let Some(ui) = resize_handle.get_webview("ui") {
+                    let _ = ui.set_size(LogicalSize::new(logical.width, logical.height));
                 }
             });
 
-            // Poll the process table centrally and push badge updates rather
-            // than having the UI ask. One walk covers every terminal.
+            // Ask the daemon what everything is doing, on a timer.
+            //
+            // It walks the process table for all its sessions in one pass and
+            // answers with the lot, and the answer reaches the UI through the
+            // event reader like any other event. Nothing here waits for it.
             let handle = app.handle().clone();
             std::thread::Builder::new()
                 .name("activity-poll".into())
-                .spawn(move || {
-                    let mut previous: Vec<TerminalInfo> = Vec::new();
-                    loop {
-                        std::thread::sleep(ACTIVITY_POLL);
-
-                        let Some(state) = handle.try_state::<Mutex<Sessions>>() else {
-                            continue;
-                        };
-                        let current = match state.lock() {
-                            Ok(s) => s.info(),
-                            Err(_) => continue,
-                        };
-
-                        // Only wake the UI when something actually changed.
-                        let changed = current.len() != previous.len()
-                            || current.iter().zip(&previous).any(|(a, b)| {
-                                a.id != b.id
-                                    || a.status != b.status
-                                    || a.title != b.title
-                                    || a.busy != b.busy
-                                    || a.running != b.running
-                                    || a.alive != b.alive
-                            });
-
-                        if changed {
-                            let _ = handle.emit("terminals", &current);
-                            previous = current;
+                .spawn(move || loop {
+                    std::thread::sleep(ACTIVITY_POLL);
+                    if let Some(state) = handle.try_state::<Mutex<Sessions>>() {
+                        if let Ok(s) = state.lock() {
+                            s.poll();
                         }
                     }
                 })

@@ -9,11 +9,14 @@
 //!   [`input`]  — prefix chords and mouse clicks vs. everything else
 
 pub mod activity;
+pub mod clipboard;
 pub mod cwd;
+pub mod daemon;
 pub mod grid;
 pub mod input;
 pub mod layout;
 pub mod pane;
+pub mod proto;
 pub mod pty;
 pub mod render;
 pub mod term;

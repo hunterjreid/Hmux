@@ -1,36 +1,43 @@
-//! The set of live terminals.
+//! The set of live terminals — none of which live here.
 //!
-//! Each session is a `PtyProcess` plus a reader thread that does two things
-//! with every chunk it receives: push it to the webview, and append it to a
-//! bounded backlog.
+//! This used to own the pseudoconsoles. It does not any more: they belong to
+//! `mux-daemon`, a process with no window, and this is the half that talks to
+//! it. The reason is the one thing a window cannot do, which is outlive itself.
+//! A terminal owned by the GUI ends when the GUI ends, so every restart began
+//! with fresh shells and a picture of the old ones. Owned by the daemon, the
+//! window is a view onto something that was already running and still is.
 //!
-//! The backlog exists so a view can be attached to a session that has already
-//! been running — output produced before anyone was listening is not lost.
+//! The shape of this module is deliberately unchanged from when it owned the
+//! ptys — same methods, same events out to the webview, same sequence numbers.
+//! Everything above it was written against that surface and none of it cares
+//! where the bytes come from.
 //!
-//! Every chunk carries a sequence number and the backlog reports the last
-//! sequence it contains. Without that the receiver cannot tell which live
-//! chunks a replay already covered, and it writes them twice.
+//! Two connections, because a named pipe cannot be read and written at the same
+//! time; see [`mux::proto::Role`].
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use mux::activity::ProcessTable;
-use mux::pty::PtyProcess;
-
-use crate::TerminalInfo;
+use mux::proto::{Event, Request, Role, SessionInfo};
 
 pub type SessionId = u32;
 
-/// Roughly a few thousand lines of scrollback per terminal. Bounded because an
-/// unattended `ping -t` would otherwise grow without limit.
-const BACKLOG_LIMIT: usize = 512 * 1024;
+/// How long to wait for the daemon to answer something we cannot proceed
+/// without. Generous: starting a shell can be slow on a cold machine, and the
+/// failure this guards against is a hang, not a delay.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How long to keep trying to reach a daemon we have just started.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Serialize)]
 pub struct Chunk {
@@ -49,34 +56,6 @@ pub struct Backlog {
     pub last_seq: u64,
 }
 
-/// Output history for one session, guarded as a unit so the text and the
-/// sequence number can never disagree.
-#[derive(Default)]
-struct History {
-    text: Vec<u8>,
-    last_seq: u64,
-}
-
-/// How recently a terminal must have printed something to count as working.
-///
-/// An interactive TUI redraws constantly while it is doing something — a
-/// spinner alone is several frames a second — and falls silent the moment it
-/// wants input. Comfortably longer than a spinner frame, short enough that
-/// "finished" registers immediately.
-const WORKING_WINDOW: Duration = Duration::from_millis(700);
-
-struct Session {
-    id: SessionId,
-    title: String,
-    /// The program that was spawned, kept so the same one can be started again
-    /// when the session is restored.
-    shell: String,
-    proc: PtyProcess,
-    history: Arc<Mutex<History>>,
-    /// When this terminal last produced output.
-    last_output: Arc<Mutex<Instant>>,
-}
-
 /// Everything about a live session that is worth writing to disk.
 pub struct Snapshot {
     pub shell: String,
@@ -86,264 +65,350 @@ pub struct Snapshot {
     pub cwd: Option<String>,
 }
 
+/// Answers we are waiting on, by the thing that will satisfy them.
+///
+/// The pipe carries one stream of events with no request ids in it, so a caller
+/// that needs an answer parks a channel here and the reader thread hands the
+/// matching event over. Creates are serialised by the state lock, so the queue
+/// only ever needs to cope with one at a time; replays are keyed by session
+/// because two terminals can be attaching at once on startup.
+#[derive(Default)]
+struct Waiting {
+    created: Vec<Sender<SessionId>>,
+    replays: HashMap<SessionId, Vec<Sender<Backlog>>>,
+}
+
+#[derive(Default)]
+struct Shared {
+    /// The last thing the daemon said the world looks like.
+    infos: Mutex<Vec<SessionInfo>>,
+    waiting: Mutex<Waiting>,
+}
+
+struct Client {
+    /// The request half. Never read from.
+    out: Mutex<File>,
+    shared: Arc<Shared>,
+}
+
 #[derive(Default)]
 pub struct Sessions {
-    map: HashMap<SessionId, Session>,
-    /// Preserves button order; a HashMap would shuffle the sidebar on every
-    /// repaint.
-    order: Vec<SessionId>,
-    next_id: SessionId,
+    client: Option<Client>,
 }
 
 impl Sessions {
+    /// Find the daemon, starting one if there is not already one running, and
+    /// begin pumping its events into the webview.
+    pub fn connect(&mut self, app: &AppHandle) -> Result<()> {
+        // Short patience first: if a daemon is already up this succeeds at
+        // once, and if there is none there is nothing to wait for yet.
+        let (requests, events) = open_pair(Duration::from_millis(400)).or_else(|_| {
+            start_daemon()?;
+            open_pair(STARTUP_TIMEOUT)
+        })?;
+
+        let shared = Arc::new(Shared::default());
+        spawn_event_reader(events, Arc::clone(&shared), app.clone());
+
+        self.client = Some(Client {
+            out: Mutex::new(requests),
+            shared,
+        });
+        // Nothing is known until the daemon says so, and the first thing the UI
+        // asks is what exists.
+        self.ask(Request::List)?;
+        Ok(())
+    }
+
+    fn client(&self) -> Result<&Client> {
+        self.client
+            .as_ref()
+            .ok_or_else(|| anyhow!("not connected to the mux daemon"))
+    }
+
+    fn ask(&self, req: Request) -> Result<()> {
+        let client = self.client()?;
+        let line = serde_json::to_string(&req)? + "\n";
+        let mut out = client
+            .out
+            .lock()
+            .map_err(|_| anyhow!("the request channel is poisoned"))?;
+        out.write_all(line.as_bytes())
+            .context("the daemon stopped listening")?;
+        out.flush().ok();
+        Ok(())
+    }
+
     pub fn create(
         &mut self,
-        app: &AppHandle,
+        _app: &AppHandle,
         shell: &str,
         cols: u16,
         rows: u16,
     ) -> Result<SessionId> {
-        self.start(app, shell, None, String::new(), cols, rows)
+        self.start(shell, None, String::new(), cols, rows)
     }
 
     /// Bring a session back: the same shell, in the directory the old one was
     /// working in, with the old one's output already in its backlog.
     ///
-    /// The replay is seeded into the history rather than written to the pty,
-    /// so it is text the new shell never sees. Writing it down the pty would
-    /// hand the shell thousands of lines of its predecessor's output as input.
+    /// Only reached when the daemon has nothing — after a reboot, or the very
+    /// first run. Any other time the terminals are still there and are attached
+    /// to rather than recreated.
     pub fn restore(
         &mut self,
-        app: &AppHandle,
+        _app: &AppHandle,
         shell: &str,
         cwd: Option<PathBuf>,
         replay: String,
         cols: u16,
         rows: u16,
     ) -> Result<SessionId> {
-        self.start(app, shell, cwd, replay, cols, rows)
+        self.start(shell, cwd, replay, cols, rows)
     }
 
     fn start(
         &mut self,
-        app: &AppHandle,
         shell: &str,
         cwd: Option<PathBuf>,
         replay: String,
         cols: u16,
         rows: u16,
     ) -> Result<SessionId> {
-        self.next_id += 1;
-        let id = self.next_id;
+        let (tx, rx) = channel();
+        {
+            let client = self.client()?;
+            let mut waiting = client
+                .shared
+                .waiting
+                .lock()
+                .map_err(|_| anyhow!("the wait table is poisoned"))?;
+            waiting.created.push(tx);
+        }
 
-        let (proc, reader) = PtyProcess::spawn_in(shell, cwd.as_deref(), cols, rows)?;
-        // Sequence numbers start at one, so a replay seeded here is never
-        // mistaken for a chunk the live stream has already delivered.
-        let history = Arc::new(Mutex::new(History {
-            text: replay.into_bytes(),
-            last_seq: 0,
-        }));
-        let last_output = Arc::new(Mutex::new(Instant::now()));
-
-        spawn_reader(
-            id,
-            reader,
-            Arc::clone(&history),
-            Arc::clone(&last_output),
-            app.clone(),
-            &proc,
-        );
-
-        let exit_app = app.clone();
-        proc.watch_exit(move || {
-            let _ = exit_app.emit("terminal-exit", id);
-        });
-
-        let title = std::path::Path::new(shell)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| shell.to_string());
-
-        self.map.insert(
-            id,
-            Session {
-                id,
-                title,
-                shell: shell.to_string(),
-                proc,
-                history,
-                last_output,
+        self.ask(Request::Create {
+            shell: Some(shell.to_string()),
+            cwd: cwd.map(|p| p.display().to_string()),
+            cols,
+            rows,
+            replay: if replay.is_empty() {
+                None
+            } else {
+                Some(replay)
             },
-        );
-        self.order.push(id);
-        Ok(id)
+        })?;
+
+        rx.recv_timeout(REPLY_TIMEOUT)
+            .map_err(|_| anyhow!("the daemon did not start a shell"))
     }
 
-    /// What this session would need to be recreated. `None` once it is gone.
-    pub fn snapshot_of(&self, id: SessionId) -> Option<Snapshot> {
-        let session = self.map.get(&id)?;
-        let scrollback = session
-            .history
-            .lock()
-            .ok()
-            .map(|h| String::from_utf8_lossy(&h.text).to_string())
-            .unwrap_or_default();
-        let cwd = session
-            .proc
-            .pid()
-            .and_then(mux::cwd::of_process)
-            .map(|p| p.to_string_lossy().into_owned());
+    /// Attach to a terminal the daemon already had, and hand back everything it
+    /// has said so far. The warm path: this is what makes a reopened window
+    /// show the session rather than a new one.
+    pub fn attach(&self, id: SessionId) -> Result<Backlog> {
+        let (tx, rx) = channel();
+        {
+            let client = self.client()?;
+            let mut waiting = client
+                .shared
+                .waiting
+                .lock()
+                .map_err(|_| anyhow!("the wait table is poisoned"))?;
+            waiting.replays.entry(id).or_default().push(tx);
+        }
+        self.ask(Request::Attach { id, from: 0 })?;
+        rx.recv_timeout(REPLY_TIMEOUT)
+            .map_err(|_| anyhow!("the daemon did not send terminal {id}'s history"))
+    }
 
+    /// What the daemon knows about a session, for the session file.
+    ///
+    /// No scrollback: the text written to disk is the one the UI serialises out
+    /// of its own buffer, because only the terminal that drew it knows what it
+    /// ended up looking like.
+    pub fn snapshot_of(&self, id: SessionId) -> Option<Snapshot> {
+        let client = self.client().ok()?;
+        let infos = client.shared.infos.lock().ok()?;
+        let info = infos.iter().find(|i| i.id == id)?;
         Some(Snapshot {
-            shell: session.shell.clone(),
-            scrollback,
-            cwd,
+            shell: info.shell.clone(),
+            scrollback: String::new(),
+            cwd: info.cwd.clone(),
         })
     }
 
     pub fn write(&self, id: SessionId, bytes: &[u8]) {
-        if let Some(s) = self.map.get(&id) {
-            s.proc.write_input(bytes);
-        }
+        let _ = self.ask(Request::Input {
+            id,
+            data: String::from_utf8_lossy(bytes).to_string(),
+        });
     }
 
     pub fn resize(&self, id: SessionId, cols: u16, rows: u16) {
-        if let Some(s) = self.map.get(&id) {
-            s.proc.resize(cols, rows);
-        }
+        let _ = self.ask(Request::Resize { id, cols, rows });
     }
 
     pub fn close(&mut self, id: SessionId) {
-        if let Some(s) = self.map.remove(&id) {
-            s.proc.kill();
-        }
-        self.order.retain(|&x| x != id);
+        let _ = self.ask(Request::Close { id });
     }
 
-    pub fn backlog(&self, id: SessionId) -> Backlog {
-        self.map
-            .get(&id)
-            .and_then(|s| s.history.lock().ok())
-            .map(|h| Backlog {
-                text: String::from_utf8_lossy(&h.text).to_string(),
-                last_seq: h.last_seq,
-            })
-            .unwrap_or(Backlog {
-                text: String::new(),
-                last_seq: 0,
-            })
+    /// Ask the daemon to say what exists. The answer arrives as an event and
+    /// updates [`Sessions::info`]; nothing waits for it.
+    pub fn poll(&self) {
+        let _ = self.ask(Request::List);
     }
 
-    /// Current state of every terminal, in button order.
-    pub fn info(&self) -> Vec<TerminalInfo> {
-        // One process-table walk for all sessions.
-        let table = ProcessTable::capture();
-
-        self.order
-            .iter()
-            .filter_map(|id| self.map.get(id))
-            .map(|s| {
-                let working = s
-                    .last_output
-                    .lock()
-                    .map(|t| t.elapsed() < WORKING_WINDOW)
-                    .unwrap_or(false);
-                let activity = table.activity_of(s.proc.pid(), s.proc.is_alive(), working);
-                TerminalInfo {
-                    id: s.id,
-                    title: s.title.clone(),
-                    status: activity.label(),
-                    busy: activity.is_busy(),
-                    running: activity.is_running(),
-                    alive: s.proc.is_alive(),
-                }
-            })
-            .collect()
+    pub fn info(&self) -> Vec<SessionInfo> {
+        self.client()
+            .ok()
+            .and_then(|c| c.shared.infos.lock().ok().map(|i| i.clone()))
+            .unwrap_or_default()
     }
 }
 
-fn spawn_reader(
-    id: SessionId,
-    mut reader: Box<dyn Read + Send>,
-    history: Arc<Mutex<History>>,
-    last_output: Arc<Mutex<Instant>>,
-    app: AppHandle,
-    proc: &PtyProcess,
-) {
-    let alive = proc.alive_handle();
+// ------------------------------------------------------------- the connection
 
+/// Open the pipe, waiting out the moments when there is no free instance.
+///
+/// A named pipe serves one client per instance, and the daemon creates the next
+/// one only after the last has been claimed. Opening two connections back to
+/// back lands in that gap almost every time, and it reports as "all pipe
+/// instances are busy" rather than as anything to do with timing. Retrying is
+/// the documented answer; the wait is measured in microseconds in practice.
+fn connect_with_retry(patience: Duration) -> Result<File> {
+    let deadline = std::time::Instant::now() + patience;
+    loop {
+        match mux::daemon::connect() {
+            Ok(file) => return Ok(file),
+            Err(e) if std::time::Instant::now() >= deadline => return Err(e),
+            Err(_) => std::thread::sleep(Duration::from_millis(25)),
+        }
+    }
+}
+
+/// Open both halves and introduce them to each other.
+///
+/// Both are opened before either says hello. The other order is worse than it
+/// looks: a hello registers the connection with the daemon, so failing to open
+/// the second half after announcing the first leaves a client behind that owns
+/// the token, and every retry is then refused for colliding with the wreck of
+/// the attempt before it.
+fn open_pair(patience: Duration) -> Result<(File, File)> {
+    let mut events = connect_with_retry(patience)?;
+    let mut requests = connect_with_retry(patience)?;
+
+    // Unique per window, which is all it needs to be: it pairs two connections,
+    // it does not authorise them.
+    let token = format!("gui-{}", std::process::id());
+
+    writeln!(
+        events,
+        "{}",
+        serde_json::to_string(&Request::Hello {
+            role: Role::Events,
+            token: token.clone(),
+        })?
+    )?;
+    events.flush().ok();
+
+    writeln!(
+        requests,
+        "{}",
+        serde_json::to_string(&Request::Hello {
+            role: Role::Requests,
+            token,
+        })?
+    )?;
+    requests.flush().ok();
+
+    Ok((requests, events))
+}
+
+/// Start the daemon that should have been running.
+///
+/// Detached on purpose: it must not die with this window, which is the entire
+/// point of it. It lives beside this executable, because that is where the
+/// installer puts both.
+fn start_daemon() -> Result<()> {
+    let exe = std::env::current_exe()
+        .context("could not find our own path")?
+        .parent()
+        .ok_or_else(|| anyhow!("no directory to look in"))?
+        .join("mux-daemon.exe");
+
+    if !exe.exists() {
+        bail!("{} is missing", exe.display());
+    }
+
+    std::process::Command::new(&exe)
+        .spawn()
+        .with_context(|| format!("could not start {}", exe.display()))?;
+    Ok(())
+}
+
+/// Turn the daemon's events into the ones the webview already listens for.
+fn spawn_event_reader(events: File, shared: Arc<Shared>, app: AppHandle) {
     std::thread::Builder::new()
-        .name(format!("session-{id}-reader"))
+        .name("daemon-events".into())
         .spawn(move || {
-            let mut buf = [0u8; 8192];
-            // A multi-byte character can straddle a read boundary; holding the
-            // tail avoids emitting a replacement character mid-glyph.
-            let mut carry: Vec<u8> = Vec::new();
-
-            loop {
-                let n = match reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(_) => break,
-                };
-
-                carry.extend_from_slice(&buf[..n]);
-                let text = match std::str::from_utf8(&carry) {
-                    Ok(s) => {
-                        let owned = s.to_string();
-                        carry.clear();
-                        owned
-                    }
-                    Err(e) => {
-                        let good = e.valid_up_to();
-                        let owned =
-                            String::from_utf8_lossy(&carry[..good]).to_string();
-                        carry.drain(..good);
-                        // A genuinely invalid sequence would never drain; cap
-                        // the carry so one bad byte can't wedge the stream.
-                        if carry.len() > 8 {
-                            carry.clear();
-                        }
-                        owned
-                    }
-                };
-
-                if text.is_empty() {
+            for line in BufReader::new(events).lines() {
+                let Ok(line) = line else { break };
+                if line.trim().is_empty() {
                     continue;
                 }
-
-                // Stamped before the emit so a slow UI cannot make a working
-                // terminal look idle.
-                if let Ok(mut t) = last_output.lock() {
-                    *t = Instant::now();
-                }
-
-                // Append and take the sequence number under one lock, so the
-                // number a chunk carries always matches what the backlog holds.
-                let seq = match history.lock() {
-                    Ok(mut h) => {
-                        h.text.extend_from_slice(text.as_bytes());
-                        if h.text.len() > BACKLOG_LIMIT {
-                            let excess = h.text.len() - BACKLOG_LIMIT;
-                            h.text.drain(..excess);
-                        }
-                        h.last_seq += 1;
-                        h.last_seq
-                    }
-                    Err(_) => return,
+                let Ok(event) = serde_json::from_str::<Event>(&line) else {
+                    continue;
                 };
 
-                if app
-                    .emit("terminal-output", Chunk { id, data: text, seq })
-                    .is_err()
-                {
-                    return;
+                match event {
+                    Event::Output { id, seq, data } => {
+                        let _ = app.emit("terminal-output", Chunk { id, data, seq });
+                    }
+
+                    Event::Exit { id } => {
+                        let _ = app.emit("terminal-exit", id);
+                    }
+
+                    Event::Sessions { sessions } => {
+                        if let Ok(mut infos) = shared.infos.lock() {
+                            *infos = sessions.clone();
+                        }
+                        let _ = app.emit("terminals", sessions);
+                    }
+
+                    Event::Created { id } => {
+                        if let Ok(mut w) = shared.waiting.lock() {
+                            if let Some(tx) = w.created.pop() {
+                                let _ = tx.send(id);
+                            }
+                        }
+                    }
+
+                    Event::Replay { id, data, seq } => {
+                        if let Ok(mut w) = shared.waiting.lock() {
+                            if let Some(list) = w.replays.remove(&id) {
+                                for tx in list {
+                                    let _ = tx.send(Backlog {
+                                        text: data.clone(),
+                                        last_seq: seq,
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    Event::Error { message } => {
+                        let _ = app.emit("daemon-error", message);
+                    }
                 }
             }
 
-            if alive.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                let _ = app.emit("terminal-exit", id);
-            }
+            // The daemon went away. Say so rather than leaving a window full of
+            // terminals that quietly stopped being connected to anything.
+            let _ = app.emit(
+                "daemon-error",
+                "lost the connection to the mux daemon".to_string(),
+            );
         })
-        .expect("failed to spawn session reader thread");
+        .expect("failed to start the daemon event reader");
 }
