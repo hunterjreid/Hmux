@@ -49,13 +49,6 @@
       <symbol id="i-check" viewBox="0 0 12 12">
         <path d="M2 6.4 4.8 9.2 10 3.4" />
       </symbol>
-      <!-- The same panel with the other column filled: the terminal list,
-           rather than the page. Which side it is drawn on is what tells the
-           two buttons apart at a glance. -->
-      <symbol id="i-rail" viewBox="0 0 16 14">
-        <rect x="1" y="1.5" width="14" height="11" rx="2" />
-        <path d="M6 1.5v11" />
-      </symbol>
       <!-- A panel with its right column filled: what the button does, rather
            than a globe, which would only say "web". -->
       <symbol id="i-panel" viewBox="0 0 16 14">
@@ -82,11 +75,12 @@
             <svg class="tb-mark" aria-hidden="true"><use href="#i-mark" /></svg>
             <span data-drag>mux</span>
           </span>
-          <!-- Put the terminal list away. Beside the name because it belongs
-               to the window rather than to any one terminal, and because that
-               is where it still is once the rail it controls has gone. -->
-          <button class="icon-btn" id="rail-btn" title="Terminal list">
-            <svg class="ico"><use href="#i-rail" /></svg>
+          <!-- The page beside the terminal, opened and shut from the corner.
+               Up here rather than at the far end of the bar because it is the
+               one piece of chrome you reach for constantly, and the corner is
+               where the eye already is. -->
+          <button class="icon-btn" id="browser-btn" title="Browser sidebar">
+            <svg class="ico"><use href="#i-panel" /></svg>
           </button>
         </div>
 
@@ -101,10 +95,6 @@
 
           <button class="icon-btn" id="settings-btn" title="Settings">
             <svg class="ico"><use href="#i-gear" /></svg>
-          </button>
-
-          <button class="icon-btn" id="browser-btn" title="Browser sidebar">
-            <svg class="ico"><use href="#i-panel" /></svg>
           </button>
         </div>
 

@@ -176,34 +176,6 @@ body {
   grid-template-columns: 0 0 minmax(220px, 1fr) 4px var(--rail-w);
 }
 
-/* ---------- the rail put away ----------
- *
- * Collapsed to nothing, with its splitter, so the terminal takes the room.
- * Which side it collapses from depends on which side it was on, so each of the
- * four combinations names its own tracks rather than trying to be clever with
- * one rule. */
-.app.rail-closed {
-  grid-template-columns: 0 0 minmax(220px, 1fr) 4px minmax(0, var(--browser-w));
-}
-
-.app.rail-closed.browser-closed {
-  grid-template-columns: 0 0 1fr 0 0;
-}
-
-.app.mirrored.rail-closed {
-  grid-template-columns: minmax(0, var(--browser-w)) 4px minmax(220px, 1fr) 0 0;
-}
-
-.app.mirrored.rail-closed.browser-closed {
-  grid-template-columns: 0 0 1fr 0 0;
-}
-
-/* The rail's own header goes with it, leaving the name and the button that
-   brings it back. */
-.app.rail-closed .tb-rail {
-  width: auto;
-  border-right: none;
-}
 
 .app.mirrored .rail {
   grid-column: 5;
