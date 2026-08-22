@@ -57,9 +57,37 @@ if ($build -lt 17763) {
 
 # Overwriting a running executable fails part way through and leaves a file
 # that is neither the old build nor the new one.
+#
+# The two front ends have to be closed. The daemon deliberately does not: it is
+# holding every terminal you have open, and an update that made you kill your
+# shells to install it would cost you the thing the daemon exists to protect.
+# Windows refuses to overwrite a running image but is perfectly happy to rename
+# one, so the running daemon is moved aside and keeps executing from the moved
+# file. The new binary takes its place and is what starts next time — which is
+# whenever the old one exits, having been idle for two minutes with nothing
+# left to hold.
 $running = Get-Process -Name 'mux-gui', 'mux' -ErrorAction SilentlyContinue
 if ($running) {
     Fail 'mux is already running. Close it, then run this again.'
+}
+
+# Sweep up anything moved aside by a previous run. These are only removable
+# once the process using them has exited, so a failure here is expected and
+# means the old daemon is still going.
+Get-ChildItem -Path $InstallDir -Filter '*.old' -ErrorAction SilentlyContinue |
+    ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+
+$daemonRunning = [bool] (Get-Process -Name 'mux-daemon' -ErrorAction SilentlyContinue)
+if ($daemonRunning) {
+    $live = Join-Path $InstallDir 'mux-daemon.exe'
+    if (Test-Path $live) {
+        try {
+            Move-Item -Path $live -Destination "$live.old" -Force
+            Write-Step 'moved the running daemon aside; your terminals keep running'
+        } catch {
+            Fail "could not move the running daemon aside: $($_.Exception.Message)"
+        }
+    }
 }
 
 # The GUI is a WebView2 host. Windows 11 ships the runtime; some Windows 10

@@ -49,11 +49,41 @@
       <symbol id="i-check" viewBox="0 0 12 12">
         <path d="M2 6.4 4.8 9.2 10 3.4" />
       </symbol>
-      <!-- A panel with its right column filled: what the button does, rather
-           than a globe, which would only say "web". -->
+      <!-- A monitor: a screen on a stand. The page beside the terminal is a
+           whole display of its own, not a column of the window, and a globe
+           would only say "web". -->
       <symbol id="i-panel" viewBox="0 0 16 14">
-        <rect x="1" y="1.5" width="14" height="11" rx="2" />
-        <path d="M10 1.5v11" />
+        <rect x="1" y="1.2" width="14" height="9.2" rx="2" />
+        <path d="M8 10.4v1.7" />
+        <path d="M5.2 12.5h5.6" />
+      </symbol>
+      <!-- The profile menu's five. Single-weight strokes on the same 16-unit
+           grid as the gear, so a column of them lines up without each one
+           needing its own nudge. -->
+      <symbol id="i-info" viewBox="0 0 16 16">
+        <circle cx="8" cy="8" r="6.2" />
+        <path d="M8 7.2v4" />
+        <path d="M8 4.9v.1" stroke-linecap="round" stroke-width="1.6" />
+      </symbol>
+      <symbol id="i-help" viewBox="0 0 16 16">
+        <circle cx="8" cy="8" r="6.2" />
+        <path d="M6.3 6.1a1.75 1.75 0 1 1 1.75 1.9v1.2" />
+        <path d="M8.05 11.4v.1" stroke-linecap="round" stroke-width="1.6" />
+      </symbol>
+      <!-- A speech bubble with a tail, which is the only thing that
+           distinguishes it from the panel icon at this size. -->
+      <symbol id="i-feedback" viewBox="0 0 16 16">
+        <path d="M13.6 9.4a1.6 1.6 0 0 1-1.6 1.6H6.4L3.5 13.3V4.2a1.6 1.6 0 0 1 1.6-1.6h6.9a1.6 1.6 0 0 1 1.6 1.6z" />
+      </symbol>
+      <!-- An arrow into a tray: fetching something, rather than the circular
+           arrows, which everywhere else in this app mean reload. -->
+      <symbol id="i-download" viewBox="0 0 16 16">
+        <path d="M8 2.6v6.6" />
+        <path d="M5.4 6.9 8 9.4l2.6-2.5" />
+        <path d="M3.2 11.4v1.2a.9.9 0 0 0 .9.9h7.8a.9.9 0 0 0 .9-.9v-1.2" />
+      </symbol>
+      <symbol id="i-back" viewBox="0 0 16 16">
+        <path d="M9.6 3.8 5.4 8l4.2 4.2" />
       </symbol>
       <symbol id="i-min" viewBox="0 0 12 12"><path d="M2 6h8" /></symbol>
       <symbol id="i-max" viewBox="0 0 12 12">
@@ -89,9 +119,6 @@
              one up here was the same fact twice. -->
         <div class="tb-main" data-drag>
           <span class="spacer" data-drag></span>
-
-          <!-- Shown only when a newer release exists. -->
-          <button class="chip" id="update-chip" hidden></button>
 
           <button class="icon-btn" id="settings-btn" title="Settings">
             <svg class="ico"><use href="#i-gear" /></svg>
@@ -186,6 +213,13 @@
          gets thrown away on the next repaint. -->
     <div class="menu context" id="row-menu" hidden></div>
     <div class="menu settings" id="settings-menu" hidden></div>
+
+    <!-- An update that has already been downloaded, asking to be let in. Over
+         everything including the native browsers, which is the reason it is a
+         full-window scrim rather than a panel: a webview cannot be covered by
+         chrome, so the only way to sit above one is to have it moved out of
+         the way, which `update_apply` does by ending the process. -->
+    <div class="update-scrim" id="update-modal" hidden></div>
 
     <!-- Failures used to be invisible: a terminal would exist but never show
          up, with the reason only in a console nobody can open. -->

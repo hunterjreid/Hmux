@@ -19,6 +19,7 @@ mod browser;
 mod persist;
 mod sessions;
 mod shells;
+mod update;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -67,6 +68,20 @@ fn ui_log(message: String) {
 #[tauri::command]
 fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// Who is running this, for the foot of the profile menu.
+///
+/// The Windows account, because that is the only identity mux has. There is
+/// nothing to sign in to and nothing kept on a server, so a menu of the usual
+/// shape would be offering to log out of somewhere you were never logged in.
+/// The account name is the honest version of the same row.
+#[tauri::command]
+fn account_name() -> String {
+    std::env::var("USERNAME")
+        .ok()
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| "this machine".to_string())
 }
 
 // ---- window frame --------------------------------------------------------
@@ -482,6 +497,7 @@ fn main() {
             browser_url,
             ui_log,
             app_version,
+            account_name,
             window_minimize,
             window_toggle_maximize,
             window_is_maximized,
@@ -490,8 +506,16 @@ fn main() {
             save_layout,
             load_layout,
             restore_terminal,
+            update::update_stage,
+            update::update_staged,
+            update::update_apply,
         ])
         .setup(|app| {
+            // Anything a previous update moved aside. Done first and quietly:
+            // the files are only removable once whatever was executing them has
+            // exited, so the ones that stay are the ones still in use.
+            update::sweep_old();
+
             // Find the terminals before building anything to show them in.
             //
             // They are not ours: they belong to the daemon, and it is either

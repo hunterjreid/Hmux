@@ -2,13 +2,19 @@
 #
 #   git tag v0.1.0 && git push origin v0.1.0
 #
-# Produces four assets. The two bare executables are what install.ps1 fetches;
-# the installers are for people who would rather click something.
+# Produces five assets. The three bare executables are what install.ps1
+# fetches; the installers are for people who would rather click something.
 #
 #   mux-gui.exe              the window
 #   mux.exe                  the console version
+#   mux-daemon.exe           the process that owns the terminals
 #   mux-setup-<version>.exe  NSIS installer
 #   mux-<version>.msi        MSI, for anyone deploying it centrally
+#
+# mux-daemon.exe is not optional and its absence does not degrade gracefully:
+# install.ps1 lists all three by name and fails outright on a release missing
+# any of them. It shipped in the installer before it shipped here, so every
+# release cut in between could not be installed at all.
 
 name: release
 
@@ -50,9 +56,11 @@ jobs:
         with:
           workspaces: ". -> target"
 
-      # The console front end. `tauri build` only knows about the GUI.
-      - name: Build the console version
-        run: cargo build --release --bin mux
+      # `tauri build` only knows about the GUI, so both of the other binaries
+      # are built here. The daemon is the one that owns the pseudoconsoles —
+      # without it the window opens and cannot start a shell.
+      - name: Build the console version and the daemon
+        run: cargo build --release --bin mux --bin mux-daemon
 
       # A prebuilt CLI. Building tauri-cli from source here costs more than
       # the rest of this workflow put together.
@@ -68,8 +76,9 @@ jobs:
           $out = "release-assets"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
 
-          Copy-Item target/release/mux-gui.exe $out -ErrorAction Stop
-          Copy-Item target/release/mux.exe     $out -ErrorAction Stop
+          Copy-Item target/release/mux-gui.exe    $out -ErrorAction Stop
+          Copy-Item target/release/mux.exe        $out -ErrorAction Stop
+          Copy-Item target/release/mux-daemon.exe $out -ErrorAction Stop
 
           # Tauri names these itself and the pattern has changed between
           # versions, so find them rather than assuming.

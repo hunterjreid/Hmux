@@ -822,6 +822,54 @@ body {
   background: var(--hair);
 }
 
+/* A plain row in the profile menu: icon, then label. The icon column is the
+   same width as the tick column on `.option`, so the two kinds of row in the
+   same popover have their text starting at the same place. */
+.menu button.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.menu button.row .ico {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--muted);
+}
+
+.menu button.row:hover .ico {
+  color: var(--text);
+}
+
+/* Whose machine this is. Not a button — there is nothing to do to it, and
+   making it look pressable would promise an account page that does not
+   exist. */
+.menu-account {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.menu-account .avatar {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  /* The initial is a capital in a circle; the terminal's monospace makes it
+     look like output rather than a face. */
+  font-family: system-ui, sans-serif;
+}
+
 /* ---------- panels ---------- */
 
 /* Both panels are grid items, and a grid item defaults to `min-height: auto`,
@@ -1354,4 +1402,104 @@ body {
   flex: 1;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ---------- the update dialogue ---------- */
+
+/*
+ * Over everything, including the native browsers — which it can only manage
+ * because `showUpdateModal` parks them first. A webview is a child surface
+ * painted above the window, so no z-index here reaches over one; the scrim
+ * covers the chrome and the pages are moved off-screen for the duration.
+ */
+.update-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: rgba(20, 20, 20, 0.72);
+}
+
+.update-scrim[hidden] {
+  display: none;
+}
+
+.update-card {
+  width: min(460px, calc(100vw - 48px));
+  padding: 26px 30px 30px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--chrome);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  text-align: center;
+}
+
+.update-card h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.update-card p {
+  margin: 0 0 20px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+/* One bar and one number. A download nobody chose to start does not also need
+   a byte count and a transfer rate. */
+.update-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.update-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--elev);
+  overflow: hidden;
+}
+
+.update-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  /* Follows the number rather than jumping to it. The chunks a fetch delivers
+     are uneven, and without this the bar advances in visible steps. */
+  transition: width var(--med) var(--ease);
+}
+
+.update-pct {
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.update-go {
+  padding: 9px 20px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease);
+}
+
+.update-go:hover {
+  background: #7b8ed6;
+}
+
+.update-go:disabled {
+  background: var(--elev-hi);
+  color: var(--faint);
+  cursor: default;
 }

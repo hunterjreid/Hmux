@@ -37,7 +37,7 @@ const els = {
   filterBtn: document.getElementById("filter-btn"),
   railHead: document.getElementById("rail-head"),
   titlebar: document.getElementById("titlebar"),
-  updateChip: document.getElementById("update-chip"),
+  updateModal: document.getElementById("update-modal"),
   winMaxIcon: document.getElementById("win-max-icon"),
 };
 
@@ -322,10 +322,13 @@ function tabTitle(tab) {
  * even for a session started from nothing.
  */
 const MIRROR_KEY = "mux.mirrored";
-// Reflected by default: terminals on the right, the page on the left. The
-// stored value still wins, so a window that has been swapped stays swapped —
-// this only decides what a window with no opinion yet does.
-let mirrored = (localStorage.getItem(MIRROR_KEY) ?? "1") === "1";
+// Not reflected by default: the rail on the left, the page on the right, which
+// is the layout the README describes and the one every screenshot of this app
+// shows. It defaulted the other way round for a while, so a fresh install
+// disagreed with its own documentation. The stored value still wins, so a
+// window that has been swapped stays swapped — this only decides what a window
+// with no opinion yet does.
+let mirrored = (localStorage.getItem(MIRROR_KEY) ?? "0") === "1";
 
 function applyMirror() {
   els.app.classList.toggle("mirrored", mirrored);
@@ -343,17 +346,37 @@ function applyLoading() {
 }
 
 /**
- * Settings, under the gear.
+ * The menu under the gear: what this app is, and what you can change about it.
  *
- * A menu rather than a row of buttons in the bar. There is one thing in it
- * today and there will be more, and a bar that grows a button per preference
- * ends up being mostly preferences — the point of the top strip is the two or
- * three things you reach for constantly, and which side the terminals sit on
- * is not one of them once you have chosen.
+ * Two panes in one popover rather than two menus. Settings is the only entry
+ * with anything under it, and a submenu that flies out sideways from a popover
+ * already pinned to the right edge of the window has nowhere to fly to.
+ * Replacing the contents in place keeps it in the corner it opened in.
+ *
+ * There is no account row of the usual kind because there is no account. mux
+ * keeps nothing on a server and has nothing to sign in to, so the foot of the
+ * menu names the Windows user — the only identity involved — and there is no
+ * "log out", which would be an offer to leave somewhere you have never been.
  */
-function openSettings() {
+const HELP_PAGE = "https://github.com/hunterjreid/mux#readme";
+const FEEDBACK_PAGE = "https://github.com/hunterjreid/mux/issues/new";
+
+/** Which pane the popover is showing: the root, or Settings. */
+let settingsPane = "root";
+
+function openSettings(pane = "root") {
+  settingsPane = pane;
   const menu = els.settingsMenu;
   menu.innerHTML = "";
+
+  const icon = (href) => {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "ico");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", href);
+    svg.appendChild(use);
+    return svg;
+  };
 
   const heading = (text) => {
     const el = document.createElement("div");
@@ -362,22 +385,38 @@ function openSettings() {
     menu.appendChild(el);
   };
 
+  const separator = () => {
+    const el = document.createElement("div");
+    el.className = "sep";
+    menu.appendChild(el);
+  };
+
+  /** A plain row: an icon, a label, and something it does. */
+  const item = (href, label, onPick, { keepOpen = false } = {}) => {
+    const button = document.createElement("button");
+    button.className = "row";
+    button.type = "button";
+    button.appendChild(icon(href));
+    const text = document.createElement("span");
+    text.textContent = label;
+    button.appendChild(text);
+    button.onclick = () => {
+      if (!keepOpen) closeSettings();
+      onPick();
+    };
+    menu.appendChild(button);
+    return button;
+  };
+
+  /** One choice out of a set, with a tick on the current one. */
   const option = (label, selected, onPick) => {
     const button = document.createElement("button");
     button.className = "option" + (selected ? " on" : "");
     button.type = "button";
-
-    const tick = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    tick.setAttribute("class", "ico");
-    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
-    use.setAttribute("href", "#i-check");
-    tick.appendChild(use);
-    button.appendChild(tick);
-
+    button.appendChild(icon("#i-check"));
     const text = document.createElement("span");
     text.textContent = label;
     button.appendChild(text);
-
     button.onclick = () => {
       onPick();
       closeSettings();
@@ -385,13 +424,54 @@ function openSettings() {
     menu.appendChild(button);
   };
 
-  heading("Layout");
-  option("Terminals on the left", !mirrored, () => {
-    if (mirrored) toggleMirror();
-  });
-  option("Terminals on the right", mirrored, () => {
-    if (!mirrored) toggleMirror();
-  });
+  if (settingsPane === "settings") {
+    item("#i-back", "Back", () => openSettings("root"), { keepOpen: true });
+    separator();
+    heading("Layout");
+    option("Terminals on the left", !mirrored, () => {
+      if (mirrored) toggleMirror();
+    });
+    option("Terminals on the right", mirrored, () => {
+      if (!mirrored) toggleMirror();
+    });
+  } else {
+    item("#i-gear", "Settings", () => openSettings("settings"), {
+      keepOpen: true,
+    });
+    item("#i-info", "About mux", showAbout);
+    // Both of these open in the terminal's own browser rather than in another
+    // application, for the same reason a clicked link does: the page belongs
+    // beside the shell you were in when you wanted it.
+    item("#i-help", "Help", () => openInBrowserPanel(activeId, HELP_PAGE));
+    item("#i-feedback", "Send feedback", () =>
+      openInBrowserPanel(activeId, FEEDBACK_PAGE)
+    );
+    item("#i-download", "Check for updates", () => {
+      // The six-hourly check is silent when there is nothing new. Asked for
+      // explicitly, saying nothing back reads as broken.
+      checkForUpdate().then(() => {
+        if (!updateReady && !updateInProgress) {
+          showError("update", "you are on the newest version");
+        }
+      });
+    });
+
+    separator();
+
+    // Not a button. There is nothing to do to it — it is here to say whose
+    // machine this is, which is the whole of what mux knows about you.
+    const who = document.createElement("div");
+    who.className = "menu-account";
+    const avatar = document.createElement("span");
+    avatar.className = "avatar";
+    const name = accountName || "…";
+    avatar.textContent = name.slice(0, 1).toUpperCase();
+    who.appendChild(avatar);
+    const label = document.createElement("span");
+    label.textContent = name;
+    who.appendChild(label);
+    menu.appendChild(who);
+  }
 
   // Shown before measuring, since a hidden element has no size, then pulled
   // back under the button it belongs to.
@@ -404,8 +484,38 @@ function openSettings() {
   menu.style.top = `${button.bottom + 4}px`;
 }
 
+/** The Windows user, read once. Only the profile menu wants it. */
+let accountName = "";
+
+async function loadAccountName() {
+  try {
+    accountName = await invoke("account_name");
+  } catch {
+    // The menu falls back to a placeholder rather than failing to open.
+  }
+}
+
+/**
+ * What this is and which build of it you have.
+ *
+ * In the error bar rather than a dialogue of its own: it is one line, it is
+ * dismissed the same way everything else here is, and a second modal for it
+ * would be a whole component for a version number.
+ */
+async function showAbout() {
+  let version = "?";
+  try {
+    version = await invoke("app_version");
+  } catch {}
+  showError(
+    "mux",
+    `v${version} — terminals that keep running whether or not you are looking at them`
+  );
+}
+
 function closeSettings() {
   els.settingsMenu.hidden = true;
+  settingsPane = "root";
 }
 
 function toggleMirror() {
@@ -2057,7 +2167,21 @@ function isNewer(candidate, current) {
   return false;
 }
 
+/// The binaries an update replaces, in the order they are fetched. Named here
+/// as well as in Rust because this half has to know what to ask GitHub for; the
+/// other half refuses anything not on its own list, and that is the one that
+/// matters.
+const UPDATE_BINARIES = ["mux-gui.exe", "mux.exe", "mux-daemon.exe"];
+
+/// Set once an update has been downloaded and is waiting to be applied, so the
+/// six-hourly check does not start fetching the same release again behind a
+/// dialogue that is already asking about it.
+let updateReady = null;
+let updateInProgress = false;
+
 async function checkForUpdate() {
+  if (updateReady || updateInProgress) return;
+
   let current;
   try {
     current = await invoke("app_version");
@@ -2072,16 +2196,171 @@ async function checkForUpdate() {
     // A repository with no releases yet answers 404, which is not a problem.
     if (!response.ok) return;
 
-    const { tag_name: tag } = await response.json();
+    const release = await response.json();
+    const tag = release.tag_name;
     if (!tag || !isNewer(tag, current)) return;
 
-    els.updateChip.textContent = `update to ${tag}`;
-    els.updateChip.title = `This is v${current}. Click to open the release.`;
-    els.updateChip.hidden = false;
+    // A release missing any of the three is not installable — the window would
+    // come back paired with a daemon it does not match, or with none at all.
+    // Better to keep running the version that works and say nothing.
+    const assets = new Map(
+      (release.assets || []).map((a) => [a.name, a.browser_download_url])
+    );
+    const missing = UPDATE_BINARIES.filter((n) => !assets.has(n));
+    if (missing.length) {
+      logInfo(`skipping ${tag}: it has no ${missing.join(", ")}`);
+      return;
+    }
+
+    await downloadUpdate(tag, current, assets);
   } catch {
     // Offline, rate limited, DNS down. Quietly not offering an update is the
     // right failure here: this is never why someone opened a terminal.
   }
+}
+
+/**
+ * Fetch the new binaries and stage them, then offer the restart.
+ *
+ * Downloaded before anything is said about it. An update people are asked to
+ * approve and then made to watch a progress bar for is two interruptions; this
+ * way the only moment it costs anything is the one where it is already done and
+ * the answer is a single click.
+ *
+ * Progress is per byte across all three, not per file, because three bars that
+ * each fill and reset read as three updates.
+ */
+async function downloadUpdate(tag, current, assets) {
+  updateInProgress = true;
+  showUpdateModal({ tag, current, phase: "downloading", percent: 0 });
+
+  try {
+    // Content-Length per asset, so the bar is honest from the first byte
+    // rather than jumping when a file finishes.
+    const sizes = [];
+    for (const name of UPDATE_BINARIES) {
+      const head = await fetch(assets.get(name), { method: "HEAD" });
+      sizes.push(Number(head.headers.get("content-length")) || 0);
+    }
+    const total = sizes.reduce((a, b) => a + b, 0);
+    let done = 0;
+
+    for (const name of UPDATE_BINARIES) {
+      const response = await fetch(assets.get(name));
+      if (!response.ok) throw new Error(`${name}: HTTP ${response.status}`);
+
+      // Read it in pieces so the bar moves during a nine megabyte download
+      // rather than sitting at zero and then finishing.
+      const reader = response.body.getReader();
+      const parts = [];
+      let size = 0;
+      for (;;) {
+        const { done: finished, value } = await reader.read();
+        if (finished) break;
+        parts.push(value);
+        size += value.length;
+        done += value.length;
+        if (total) {
+          showUpdateModal({
+            tag,
+            current,
+            phase: "downloading",
+            percent: Math.min(99, Math.round((done / total) * 100)),
+          });
+        }
+      }
+
+      const bytes = new Uint8Array(size);
+      let at = 0;
+      for (const part of parts) {
+        bytes.set(part, at);
+        at += part.length;
+      }
+      await invoke("update_stage", { name, bytes: Array.from(bytes) });
+    }
+
+    updateReady = tag;
+    showUpdateModal({ tag, current, phase: "ready" });
+  } catch (e) {
+    // Nothing has been swapped — staging is a separate directory — so the
+    // running install is untouched and the next check will try again.
+    logInfo(`could not download ${tag}: ${e}`);
+    hideUpdateModal();
+  } finally {
+    updateInProgress = false;
+  }
+}
+
+/**
+ * The dialogue.
+ *
+ * Deliberately blocking, and deliberately not dismissible while the download
+ * runs: the interesting sentence in it is the one about the terminals, and it
+ * is only believable if it is said at the moment someone is deciding whether to
+ * let the app restart.
+ */
+function showUpdateModal({ tag, current, phase, percent }) {
+  const el = els.updateModal;
+  const wasHidden = el.hidden;
+  el.hidden = false;
+
+  // Get the pages out of the way, once, on the way up.
+  //
+  // A native webview is not a DOM element and cannot be covered by one: it is
+  // a child surface painted over the window, so a scrim at any z-index is
+  // still underneath it. Without this the dialogue appears with a browser
+  // sitting on top of the half of it the button is in.
+  if (wasHidden) {
+    invoke("browser_layout", {
+      active: null,
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      force: true,
+    }).catch(() => {});
+  }
+
+  const body =
+    phase === "downloading"
+      ? `<div class="update-progress">
+           <div class="update-bar"><span style="width:${percent || 0}%"></span></div>
+           <span class="update-pct">Downloading update… ${percent || 0}%</span>
+         </div>`
+      : `<button class="update-go" id="update-go">Restart to update</button>`;
+
+  el.innerHTML = `
+    <div class="update-card">
+      <h2>Update available</h2>
+      <p>
+        This is mux ${current}, and ${tag} is out. Updating keeps this window
+        current — your terminals keep running the whole time.
+      </p>
+      ${body}
+    </div>`;
+
+  const go = document.getElementById("update-go");
+  if (go) {
+    go.onclick = async () => {
+      go.disabled = true;
+      go.textContent = "Restarting…";
+      try {
+        // Does not return: the new window is started and this process exits.
+        await invoke("update_apply");
+      } catch (e) {
+        showError("update", e);
+        hideUpdateModal();
+      }
+    };
+  }
+}
+
+function hideUpdateModal() {
+  els.updateModal.hidden = true;
+  els.updateModal.innerHTML = "";
+  // Put the page back where it was. Only reached when a download failed —
+  // applying the update ends the process instead.
+  pushBrowserBounds(true);
 }
 
 // -------------------------------------------------------------- splitters
@@ -2226,21 +2505,9 @@ async function main() {
   restorePanelWidths();
   fitPanelsToWindow();
   applyMirror();
+  // Not awaited: only the profile menu wants it, and that cannot be open yet.
+  loadAccountName();
   document.getElementById("err-close").onclick = () => (els.err.hidden = true);
-
-  // mux has a browser in it, so the release notes can open beside the terminal
-  // rather than throwing you out to another application.
-  els.updateChip.onclick = async () => {
-    if (activeId === null) return;
-    const entry = terminals.get(activeId);
-    if (!entry.browserOpen) {
-      entry.browserOpen = true;
-      applyBrowserVisibility(true);
-      renderButtons();
-    }
-    els.url.value = RELEASES_PAGE;
-    await go();
-  };
 
   /**
    * Open or shut the search.
@@ -2397,6 +2664,30 @@ async function main() {
     scheduleBounds();
     if (activeId !== null) syncSize(activeId);
   });
+
+  // Refit whenever the box the terminal lives in actually changes size.
+  //
+  // Everything else here fits in a `requestAnimationFrame` after doing whatever
+  // moved the columns — which is one frame into a transition that runs for
+  // `--slide`, 260ms. What gets measured is therefore the width the panel was
+  // *leaving*, and nothing measures the width it arrives at. Opening the window
+  // was the visible case: the browser column collapses on startup, the fit
+  // lands 16ms into the 260ms it takes to collapse, and the terminal spends the
+  // whole session at the handful of columns that were free at that instant,
+  // wrapping every line in a narrow ribbon down the left of an empty pane.
+  //
+  // An observer is the fix rather than another timeout because it is answering
+  // the question that was actually being asked — has this element changed size
+  // — instead of guessing at when it might have. It fires for each frame of a
+  // transition and once more at the resting size; `fitTerminal` returns
+  // immediately when the column count has not changed, so the intermediate
+  // frames cost a measurement and nothing else.
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => {
+      if (activeId !== null) syncSize(activeId);
+      scheduleBounds();
+    }).observe(els.host);
+  }
 
   // Ctrl+scroll to resize the text. The whole font UI, and it adds no chrome.
   //

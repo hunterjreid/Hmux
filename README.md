@@ -13,6 +13,20 @@ Puts the latest release in `%LOCALAPPDATA%\mux`, adds it to your PATH and makes
 a Start menu entry. Per-user, so it never asks for administrator rights, and
 uninstalling is deleting that folder.
 
+Run it again later and it updates in place. It will not do that while a window
+is open — but it does not mind the daemon running, because your terminals are
+in it. Windows refuses to overwrite a running program and allows renaming one,
+so the running daemon is moved aside and keeps going from the moved file while
+its replacement takes the name.
+
+**After the first install it updates itself.** The window checks for a new
+release on startup and every six hours, downloads it in the background, and
+then offers a restart. Taking it costs you the window for about a second: the
+terminals are the daemon's and are still there, mid-command, when it comes
+back. The new daemon is put in place but deliberately not started, so an update
+never interrupts what is running — it is picked up the next time the daemon
+starts on its own.
+
 If you'd rather click something, take an installer from the
 [latest release](https://github.com/hunterjreid/mux/releases/latest).
 
@@ -73,16 +87,27 @@ a prompt has no child processes; a shell running `ping` has `ping.exe` under it.
 So a compile that has been silent for a minute still reads as busy, which the
 usual "did it print recently" heuristic gets wrong.
 
-**It comes back the way you left it.** Closing the window writes the terminals,
-their names, the directory each was working in, what it had printed and which
-had a browser open to `%APPDATA%\mux\session.json`. Opening it again restores
-all of that: the same shells in the same directories, with the old output
-replayed above a rule saying where the previous session ended.
+**It comes back the way you left it, still running.** The shells do not belong
+to the window. They belong to `mux-daemon`, a process with no window of its
+own, and closing the window closes a view onto them rather than the things
+themselves. Reopening it attaches to the same terminals, mid-command, with
+everything they printed while nobody was looking already in the scrollback. A
+build you started and then quit the window on is still building.
 
-The shells themselves do not survive — a restored terminal is a new process,
-and anything that was running in it is gone. Keeping the processes alive across
-a quit needs a daemon that owns the ptys, which is a much bigger piece; see
-[What isn't done](#what-isnt-done).
+So there are two paths back, and which one you get is not a preference:
+
+- **Attach**, the ordinary one. The daemon is still up, the terminals are still
+  running, and the window simply sits back down in front of them.
+- **Restore**, when the daemon is not there — the first ever run, or after a
+  reboot, which is the one thing no daemon survives. Then the terminals are
+  rebuilt from `%APPDATA%\mux\session.json`: the same shells in the same
+  directories, with the old output replayed above a rule saying where the
+  previous session ended. These are new processes, and whatever was running in
+  the old ones is gone.
+
+The daemon exits on its own once the last terminal has closed and no window is
+attached, so it is not a permanent resident — it just outlives any particular
+window.
 
 The browser's address bar is collapsed to the `────` strip at the top of the
 page, and comes down when you reach it or press <kbd>Ctrl+Shift+L</kbd>. It goes
@@ -207,11 +232,11 @@ Two things that are easy to get wrong and are handled:
 
 ## What isn't done
 
-- **Not detachable.** Panes survive *switching*, and their text and directory
-  survive quitting, but the processes do not — quitting kills the shells. Real
-  detach/reattach needs a daemon that owns the ptys with the UI as a thin client
-  over a named pipe. That's the next big piece, and the reason the pty state
-  deliberately lives behind `Arc<Mutex<…>>` rather than in the render loop.
+- **The console front end is not detachable.** `mux.exe` still owns its own
+  ptys, so quitting it kills its shells. The daemon is only behind the GUI;
+  pointing the console version at it is the same client work done twice.
+- **A reboot is still a reboot.** Nothing survives one, and the restore path
+  above is what you get.
 - **No scrollback UI** in the console front end. History is captured
   (`Grid::scrollback`) but there's no way to look at it yet. The GUI has
   xterm.js's.
