@@ -17,9 +17,11 @@
       body {
         margin: 0;
         height: 100%;
-        /* Same black slate as the app around it, so opening a browser does
-           not look like opening a different program. */
-        background: #1e1e1e;
+        /* The app's chrome colour, not the terminal's black. This page sits
+           edge to edge with a terminal, and matching it made a browser with
+           nothing open look like more terminal. Keep in step with `--browser`
+           in app.css. */
+        background: #272727;
         color: #c5c8c6;
         font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
       }
@@ -56,7 +58,9 @@
         height: 46px;
         padding: 0 18px;
         border-radius: 23px;
-        border: 1px solid #3a3a3a;
+        /* Same lift over the surface as the rail's search box, so the two
+           read as the same kind of control. */
+        border: 1px solid #4e4e4e;
         background: #3c3c3c;
         color: inherit;
         font: inherit;

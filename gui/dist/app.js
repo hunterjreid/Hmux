@@ -27,15 +27,63 @@ const els = {
   browserPanel: document.getElementById("browser-panel"),
   browserBar: document.getElementById("browser-bar"),
   browserBtn: document.getElementById("browser-btn"),
+  settingsBtn: document.getElementById("settings-btn"),
+  settingsMenu: document.getElementById("settings-menu"),
+  browserProgress: document.getElementById("browser-progress"),
+  tabs: document.getElementById("tabs"),
+  tabNew: document.getElementById("tab-new"),
   rowMenu: document.getElementById("row-menu"),
   filter: document.getElementById("filter"),
+  filterBtn: document.getElementById("filter-btn"),
+  railHead: document.getElementById("rail-head"),
   titlebar: document.getElementById("titlebar"),
   updateChip: document.getElementById("update-chip"),
   winMaxIcon: document.getElementById("win-max-icon"),
 };
 
 /** Ctrl+scroll adjusts this, which is the whole of the font UI. */
-let fontSize = 13;
+/**
+ * Terminal text size, per terminal.
+ *
+ * Not one number for the window. A terminal running a full-screen program you
+ * are reading wants to be bigger than one you keep a build log in, and they sit
+ * side by side — a single size means every change to one is a change to all of
+ * them. Kept out of the session file because it is about this window rather
+ * than about what was running: a size chosen here should survive a machine
+ * restart that the shells themselves do not.
+ */
+const FONT_SIZES_KEY = "mux.fontSizes";
+const DEFAULT_FONT_SIZE = 13;
+
+function loadFontSizes() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FONT_SIZES_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+let fontSizes = loadFontSizes();
+
+function fontSizeFor(id) {
+  const saved = Number(fontSizes[id]);
+  return saved >= 8 && saved <= 28 ? saved : DEFAULT_FONT_SIZE;
+}
+
+function rememberFontSize(id, size) {
+  fontSizes[id] = size;
+  // Terminals that no longer exist would accumulate for as long as the browser
+  // profile does, so the map is pruned to what is actually open each time.
+  const live = {};
+  for (const key of terminals.keys()) {
+    if (fontSizes[key] !== undefined) live[key] = fontSizes[key];
+  }
+  fontSizes = live;
+  try {
+    localStorage.setItem(FONT_SIZES_KEY, JSON.stringify(fontSizes));
+  } catch {}
+}
 
 /** Substring typed into the rail's search box. */
 let filterText = "";
@@ -80,6 +128,292 @@ let activeId = null;
 /** The terminal whose name is currently being edited, if any. */
 let renamingId = null;
 
+// ------------------------------------------------------------------- tabs
+//
+// Each terminal keeps its own set of open pages. A tab is a number and a URL
+// here; the browser behind it is one of a fixed pool of webviews claimed by
+// that number, because a webview cannot be made once the app is running.
+//
+// Tabs belong to the terminal rather than to the window, so switching
+// terminals switches the whole set — the pages you had open beside one shell
+// are not the pages you had open beside another.
+
+/** Tab ids are unique for the life of the window; the pool is keyed by them. */
+let nextTabId = 1;
+
+function tabsOf(entry) {
+  if (!entry.tabs) entry.tabs = [];
+  return entry.tabs;
+}
+
+function activeTab(entry) {
+  const tabs = tabsOf(entry);
+  return tabs.find((t) => t.id === entry.activeTab) || tabs[0] || null;
+}
+
+/**
+ * Add a page and claim a browser for it.
+ *
+ * Returns null when every browser in the pool is already spoken for, which is
+ * a real limit rather than a failure: they are all built before the window
+ * opens and there is no making another.
+ */
+async function addTab(entry, url = HOME_PAGE) {
+  const tab = { id: nextTabId++, url, title: "" };
+  let claimed = false;
+  try {
+    claimed = await invoke("browser_claim", { tab: tab.id });
+  } catch (e) {
+    showError("new tab", e);
+    return null;
+  }
+  if (!claimed) {
+    showError("new tab", `no browser left: all ${POOL_LIMIT_HINT} pages are open`);
+    return null;
+  }
+  tabsOf(entry).push(tab);
+  entry.activeTab = tab.id;
+  return tab;
+}
+
+/** Only used to word the message above; the real limit lives in Rust. */
+const POOL_LIMIT_HINT = 12;
+
+async function closeTab(entry, tabId) {
+  const tabs = tabsOf(entry);
+  const at = tabs.findIndex((t) => t.id === tabId);
+  if (at < 0) return;
+
+  tabs.splice(at, 1);
+  try {
+    await invoke("browser_release", { tab: tabId });
+  } catch {}
+
+  if (entry.activeTab === tabId) {
+    // The one to its left, or the first that is left. Closing a tab should
+    // land you somewhere adjacent, not at the far end of the strip.
+    const next = tabs[Math.max(0, at - 1)];
+    entry.activeTab = next ? next.id : null;
+  }
+
+  // Nothing left to show, so the panel has no reason to be open. Animated,
+  // because it is the panel leaving rather than a switch between terminals —
+  // and the slide ends by refitting the terminal, which is what gives the
+  // width back rather than leaving it laid out around a panel that has gone.
+  const emptied = !tabs.length;
+  if (emptied) {
+    entry.browserOpen = false;
+    setChrome(false);
+  }
+  applyBrowserVisibility(emptied);
+  renderTabs();
+  saveLayoutSoon();
+}
+
+/** Make `tabId` the page the panel is showing. */
+function selectTab(entry, tabId) {
+  if (!tabsOf(entry).some((t) => t.id === tabId)) return;
+  entry.activeTab = tabId;
+  const tab = activeTab(entry);
+  els.url.value = tab && tab.url !== HOME_PAGE ? tab.url : "";
+  renderTabs();
+  applyLoading();
+  // Which webview is over the slot is decided by the tab handed to Rust, so
+  // the panel has to be told again even though nothing about it moved — and
+  // told that this one counts, since the rectangle is identical.
+  requestAnimationFrame(() => pushBrowserBounds(true));
+}
+
+/**
+ * Draw the strip for whichever terminal is on screen.
+ *
+ * Rebuilt wholesale rather than updated in place: a handful of tabs is nothing
+ * to diff, and unlike the rail this does not carry an animation that restarting
+ * would ruin.
+ */
+function renderTabs() {
+  const entry = activeId === null ? null : terminals.get(activeId);
+  els.tabs.innerHTML = "";
+  if (!entry) return;
+
+  for (const tab of tabsOf(entry)) {
+    const el = document.createElement("div");
+    el.className = "tab" + (tab.id === entry.activeTab ? " active" : "");
+    el.title = tab.url === HOME_PAGE ? "New tab" : tab.url;
+    el.onclick = () => selectTab(entry, tab.id);
+
+    // The site's mark, taken from the site itself rather than through a
+    // favicon service: mux would otherwise tell a third party every address
+    // you open, which is not a reasonable price for a 13px picture.
+    const icon = document.createElement("img");
+    icon.className = "tab-icon";
+    icon.alt = "";
+    const favicon = faviconFor(tab.url);
+    if (favicon) {
+      icon.src = favicon;
+      // Plenty of sites have none. Hidden rather than removed, so the row does
+      // not close up around the gap and shift every name along.
+      icon.onerror = () => {
+        icon.style.visibility = "hidden";
+      };
+    } else {
+      icon.style.visibility = "hidden";
+    }
+    el.appendChild(icon);
+
+    const label = document.createElement("span");
+    label.className = "tab-label";
+    label.textContent = tabTitle(tab);
+    el.appendChild(label);
+
+    const close = document.createElement("button");
+    close.className = "tab-close";
+    close.title = "Close tab";
+    close.onclick = (e) => {
+      // Or clicking the cross would also select the tab on the way past.
+      e.stopPropagation();
+      closeTab(entry, tab.id).catch((err) => showError("close tab", err));
+    };
+    const ico = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    ico.setAttribute("class", "ico");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", "#i-close");
+    ico.appendChild(use);
+    close.appendChild(ico);
+    el.appendChild(close);
+
+    els.tabs.appendChild(el);
+  }
+}
+
+/**
+ * What to call a tab.
+ *
+ * The host, not the whole address: a strip of tabs all reading "https://" tells
+ * you nothing, and the host is what people actually navigate by.
+ */
+/** Where a site keeps its mark, by the convention every site follows. */
+function faviconFor(url) {
+  if (!url || url === HOME_PAGE) return "";
+  try {
+    const { origin, protocol } = new URL(url);
+    // A local file has no origin worth asking.
+    if (protocol !== "http:" && protocol !== "https:") return "";
+    return `${origin}/favicon.ico`;
+  } catch {
+    return "";
+  }
+}
+
+function tabTitle(tab) {
+  if (!tab.url || tab.url === HOME_PAGE) return "New tab";
+  if (tab.title) return tab.title;
+  try {
+    return new URL(tab.url).host.replace(/^www\./, "") || tab.url;
+  } catch {
+    return tab.url;
+  }
+}
+
+/**
+ * Whether the layout is reflected: terminals on the right, the page on the
+ * left. Kept here rather than in the session file because it is about the
+ * window, not about what was running in it — a preference that should hold
+ * even for a session started from nothing.
+ */
+const MIRROR_KEY = "mux.mirrored";
+// Reflected by default: terminals on the right, the page on the left. The
+// stored value still wins, so a window that has been swapped stays swapped —
+// this only decides what a window with no opinion yet does.
+let mirrored = (localStorage.getItem(MIRROR_KEY) ?? "1") === "1";
+
+function applyMirror() {
+  els.app.classList.toggle("mirrored", mirrored);
+  // Every column has moved, so the hole the native browser sits in has too.
+  requestAnimationFrame(() => {
+    pushBrowserBounds();
+    if (activeId !== null) syncSize(activeId);
+  });
+}
+
+/** Show the loading bar if the terminal on screen has a page coming in. */
+function applyLoading() {
+  const entry = activeId === null ? null : terminals.get(activeId);
+  els.browserProgress.hidden = !(entry && entry.loading && entry.browserOpen);
+}
+
+/**
+ * Settings, under the gear.
+ *
+ * A menu rather than a row of buttons in the bar. There is one thing in it
+ * today and there will be more, and a bar that grows a button per preference
+ * ends up being mostly preferences — the point of the top strip is the two or
+ * three things you reach for constantly, and which side the terminals sit on
+ * is not one of them once you have chosen.
+ */
+function openSettings() {
+  const menu = els.settingsMenu;
+  menu.innerHTML = "";
+
+  const heading = (text) => {
+    const el = document.createElement("div");
+    el.className = "menu-heading";
+    el.textContent = text;
+    menu.appendChild(el);
+  };
+
+  const option = (label, selected, onPick) => {
+    const button = document.createElement("button");
+    button.className = "option" + (selected ? " on" : "");
+    button.type = "button";
+
+    const tick = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    tick.setAttribute("class", "ico");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", "#i-check");
+    tick.appendChild(use);
+    button.appendChild(tick);
+
+    const text = document.createElement("span");
+    text.textContent = label;
+    button.appendChild(text);
+
+    button.onclick = () => {
+      onPick();
+      closeSettings();
+    };
+    menu.appendChild(button);
+  };
+
+  heading("Layout");
+  option("Terminals on the left", !mirrored, () => {
+    if (mirrored) toggleMirror();
+  });
+  option("Terminals on the right", mirrored, () => {
+    if (!mirrored) toggleMirror();
+  });
+
+  // Shown before measuring, since a hidden element has no size, then pulled
+  // back under the button it belongs to.
+  menu.hidden = false;
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+  const button = els.settingsBtn.getBoundingClientRect();
+  const box = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(4, Math.min(button.right - box.width, window.innerWidth - box.width - 6))}px`;
+  menu.style.top = `${button.bottom + 4}px`;
+}
+
+function closeSettings() {
+  els.settingsMenu.hidden = true;
+}
+
+function toggleMirror() {
+  mirrored = !mirrored;
+  localStorage.setItem(MIRROR_KEY, mirrored ? "1" : "0");
+  applyMirror();
+}
+
 // ---------------------------------------------------------------- terminals
 
 // Monokai Dimmed's sixteen, lifted from the theme Cursor is using rather than
@@ -117,20 +451,59 @@ const THEME = {
   brightMagenta: "#AE81FF",
   brightCyan: "#66D9EF",
   brightWhite: "#F8F8F2",
+  // The engine's default thumb is the foreground at 20% opacity, which against
+  // this background is close enough to invisible that the terminal reads as
+  // having no scrollbar at all. A scrollbar is also a position indicator, and
+  // one you cannot see does not indicate anything.
+  scrollbarSliderBackground: "#4A4F58",
+  scrollbarSliderHoverBackground: "#5E646F",
+  scrollbarSliderActiveBackground: "#767D8A",
 };
 
-function makeTerminal(id) {
+/**
+ * An answer this terminal generated on its own behalf, rather than a keystroke.
+ *
+ * Cursor position reports, device attributes, and the mode reports that go with
+ * them. Anchored at both ends so it can only match a whole message: a person
+ * cannot type an escape character, so nothing a person does reaches this, and
+ * paste is not routed through here.
+ */
+const IS_TERMINAL_REPLY =
+  /^\x1b(?:\[[\d;?]*[Rcn]|\[\?[\d;]*[$ychl]|P[\d+$]?[^\x1b]*\x1b\\)$/;
+
+/**
+ * @param id      the session this view is attached to
+ * @param initial the size the terminal was when its saved text was written.
+ *                Serialized output is a grid, so it goes back into a grid of
+ *                the same width; the fit on the first layout reflows it to
+ *                whatever the window is now.
+ */
+function makeTerminal(id, initial = null) {
   const view = document.createElement("div");
   view.className = "term-view";
   els.host.appendChild(view);
 
   const term = new Terminal({
     fontFamily: '"Geist Mono", "Cascadia Code", Consolas, monospace',
-    fontSize: fontSize,
-    lineHeight: 1.25,
+    fontSize: fontSizeFor(id),
+    // Exactly one. Anything above it is a gap between rows, and a gap between
+    // rows is a gap in every box a program draws: the DOM renderer takes box
+    // characters from the font rather than drawing them to fill the cell, so
+    // the verticals of a framed banner stop being a line and become a column
+    // of dashes. Spacing that looks generous in prose is a broken border here.
+    lineHeight: 1,
     cursorBlink: true,
     allowProposedApi: true,
-    scrollback: 10000,
+    // How far back you can scroll, in lines.
+    //
+    // This is also how long your place survives. Scrolling up and switching
+    // away holds exactly; output arriving while you are parked holds exactly.
+    // The one thing that loses it is the buffer filling: the front is dropped,
+    // and the lines you were reading stop existing. Nothing can hold a position
+    // in text that has been discarded, so the only lever is how long it takes
+    // to get there — and a session that talks for an hour goes through ten
+    // thousand lines without trying.
+    scrollback: 50000,
     theme: THEME,
     // Leave colours exactly as the program asked for them. Anything above 1
     // lets xterm.js quietly lighten or darken text to hit a contrast target,
@@ -152,6 +525,12 @@ function makeTerminal(id) {
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
 
+  // What gets written to disk on every save. Serializing the buffer gives the
+  // text as it was *drawn*; the pty byte stream that produced it is a different
+  // thing entirely and cannot be replayed — see saveLayout.
+  const serializer = new SerializeAddon.SerializeAddon();
+  term.loadAddon(serializer);
+
   // Anything in the output that looks like a URL becomes clickable, and goes
   // to this terminal's own browser.
   term.loadAddon(
@@ -167,8 +546,65 @@ function makeTerminal(id) {
 
   term.open(view);
 
+  /**
+   * Right click: copy what is selected, or paste when nothing is.
+   *
+   * The two halves are one gesture because that is what a terminal on Windows
+   * does, and because the alternative is a menu for two items you always know
+   * which of you want. Selecting then right-clicking takes the text; clicking
+   * with nothing selected puts the clipboard in.
+   *
+   * The paste goes through xterm rather than straight down the pty, which
+   * matters more than it looks: a shell with bracketed paste on — every one of
+   * them here, they all set `?2004h` — expects pasted text wrapped in markers
+   * that tell it this was pasted rather than typed. Without them a paste of
+   * five lines runs five commands, and the fifth runs before you have read the
+   * first. `term.paste` wraps it or does not, according to the mode the shell
+   * actually set.
+   */
+  view.addEventListener("contextmenu", async (e) => {
+    e.preventDefault();
+
+    const selection = term.getSelection();
+    if (selection) {
+      try {
+        await invoke("clipboard_write", { text: selection });
+      } catch (err) {
+        showError("copy", err);
+      }
+      // Cleared so the next right click pastes. Leaving it selected makes the
+      // button do the same thing twice and never the other one.
+      term.clearSelection();
+      term.focus();
+      return;
+    }
+
+    try {
+      const text = await invoke("clipboard_read");
+      if (text) term.paste(text);
+    } catch (err) {
+      showError("paste", err);
+    }
+    term.focus();
+  });
+
+  // Before a single byte of the replay lands. Opening sizes the terminal to a
+  // container the view is not laid out in yet, and text written at the wrong
+  // width wraps at the wrong column even after the fit reflows it back.
+  if (initial && initial.cols > 0 && initial.rows > 0) {
+    term.resize(initial.cols, initial.rows);
+  }
+
   // Every keystroke goes straight to the pty. No local echo — the shell echoes.
+  //
+  // Except this terminal's answers to the shell's own questions. A program can
+  // ask where the cursor is or what the terminal is, and xterm.js answers on
+  // this same channel, indistinguishable from typing. It must not: the daemon
+  // owns the pty and answers for it, because it is the only side still there
+  // when this window is closed. Two answers to one question means the second
+  // arrives as input, and a shell that asked once gets `[24;1R` typed at it.
   term.onData((data) => {
+    if (IS_TERMINAL_REPLY.test(data)) return;
     invoke("write_terminal", { id, data }).catch(console.error);
   });
 
@@ -188,22 +624,29 @@ function makeTerminal(id) {
     term,
     fit,
     view,
+    serializer,
     info: null,
     ready: false,
     lastSeq: 0,
     pending: [],
     // The size the pty was last told about. Re-sending one it already has is
     // not free; see syncSize.
-    lastCols: 0,
-    lastRows: 0,
+    // Seeded with the size the pty is already at, not zero.
+    //
+    // These exist so a fit that lands on the size the shell already has sends
+    // nothing. Starting them at zero meant the first fit after opening a window
+    // always disagreed and always resized — and ConPTY answers a resize by
+    // redrawing the whole screen, which an inline TUI answers by drawing its
+    // banner again *below* the last one rather than over it. Reopening a window
+    // at the size you left it should be silent, and this is what makes it so.
+    lastCols: initial && initial.cols > 0 ? initial.cols : 0,
+    lastRows: initial && initial.rows > 0 ? initial.rows : 0,
     // Each terminal owns a browser; remembering the address here means the bar
     // shows the right thing the instant you switch, without waiting on a poll.
     url: HOME_PAGE,
     // Closed by default. Opening one is a per-terminal decision, so coming
     // back to a terminal restores whatever you had beside it.
     browserOpen: false,
-    // Lines that arrived while this terminal was not the one on screen.
-    unread: 0,
     // Set by renaming. Overrides whatever the shell calls itself.
     customName: null,
   };
@@ -228,6 +671,10 @@ function makeTerminal(id) {
         }
       }
       entry.pending = [];
+      // A restored terminal opens at the prompt, not part way up last week's
+      // output. Queued behind the writes above, which is when the buffer has
+      // its final length.
+      term.write("", () => term.scrollToBottom());
     })
     .catch((e) => showError("terminal_backlog", e));
 
@@ -251,11 +698,35 @@ function toFileUrl(path) {
  * greedy match would swallow the rest of the sentence after the filename, and
  * requiring an extension is what lets it know where the path stopped.
  */
+/**
+ * Domains that get to be links without a scheme in front of them.
+ *
+ * An allowlist rather than "two or more letters after a dot", because that
+ * matches `seo.js`, `app.py` and every filename anyone ever prints. These are
+ * the endings that are almost never a file extension.
+ */
+const BARE_TLDS =
+  "com|net|org|io|dev|app|gg|ai|co|nz|au|uk|me|xyz|sh|to|so|tv|cc|info|store|shop";
+
 const LINK_PATTERNS = [
   { find: /file:\/\/\/[^\s"'<>`|]+/g, target: (m) => m },
+  { find: /https?:\/\/[^\s"'<>`|]+/g, target: (m) => m },
   {
     find: /[A-Za-z]:\\[^\r\n<>"|*?]*?\.[A-Za-z0-9]{2,6}(?=[\s,;:)\]}'"]|$)/g,
     target: toFileUrl,
+  },
+  {
+    // A domain written the way people write them: `trenchies.co`, no scheme.
+    //
+    // The lookbehind is what keeps this out of paths and addresses that
+    // another pattern already owns — `...\cdn.prod.website-files.com\...` is
+    // part of a file path, and `https://silka.co.nz` is already a link. Both
+    // end in something this would otherwise match in the middle of.
+    find: new RegExp(
+      String.raw`(?<![\\/\w.@:-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:${BARE_TLDS})\b(?:/[^\s"'<>\`|]*)?`,
+      "gi"
+    ),
+    target: (m) => `https://${m}`,
   },
 ];
 
@@ -329,15 +800,6 @@ function applyChunk({ id, data, seq }) {
   entry.lastSeq = seq;
   entry.term.write(data);
 
-  // Count new lines only for terminals you are not looking at, so the rail can
-  // say "something happened over here" without you having to go and check.
-  if (id !== activeId) {
-    const lines = (data.match(/\n/g) || []).length;
-    if (lines > 0) {
-      entry.unread += lines;
-      scheduleButtons();
-    }
-  }
 }
 
 // Output can arrive hundreds of times a second; rebuilding the rail on each
@@ -363,11 +825,83 @@ function scheduleButtons() {
  * Only the size the drag ends on is worth sending.
  *
  * Long enough to swallow a drag, short enough that letting go feels immediate.
+ *
+ * The cost of being too short is not a wasted message: every size that gets
+ * through is another copy of a full-screen program's banner in the scrollback,
+ * because that is what ConPTY's repaint does to a TUI that draws inline. A
+ * drag that pauses is still one drag, so this is set to outlast a pause rather
+ * than only the gap between frames.
  */
-const RESIZE_QUIET_MS = 150;
+const RESIZE_QUIET_MS = 400;
+
+/**
+ * How long a window takes to stop changing size after it opens.
+ *
+ * Opening one is not a single size. The window is built, the webview is sized
+ * into it, and then the size it was last left at is restored — three different
+ * layouts, far enough apart that the ordinary quiet period lets all three
+ * through. Each one is a repaint, and a repaint is another copy of a TUI's
+ * banner, so a window reopening on a session running one came back with the
+ * banner three times. Nothing before the last of them is worth sending.
+ */
+const STARTUP_SETTLE_MS = 1200;
+const startedAt = performance.now();
+
+/** How long to wait before telling the pty, given how long we have been up. */
+function resizeQuiet() {
+  return performance.now() - startedAt < STARTUP_SETTLE_MS
+    ? STARTUP_SETTLE_MS
+    : RESIZE_QUIET_MS;
+}
 
 /** Pending pty resize, per terminal. */
 const resizeTimers = new Map();
+
+/**
+ * Do something that changes a terminal's width, and keep the reader's place.
+ *
+ * Narrowing a terminal re-wraps every long line, so the same text occupies more
+ * rows than it did and every row number below the change moves. xterm keeps the
+ * viewport on the same NUMBER, which after a reflow is the one thing that is no
+ * longer the same place — the view ends up hundreds of lines from where it was.
+ *
+ * A marker is the buffer's own answer. It is attached to a line and carried
+ * along by the reflow, so asking it afterwards where that line ended up gives
+ * the row the text actually moved to.
+ *
+ * Wrapped around every path that resizes, not just the visible one. A terminal
+ * you are not looking at is resized to match the one you are, and that reflow
+ * is invisible until you switch back to find your place gone.
+ *
+ * Only when scrolled back: at the bottom there is nothing to preserve, and
+ * following the end is already what should happen.
+ */
+function preservingView(entry, change) {
+  const buffer = entry.term.buffer.active;
+  let anchor = null;
+  if (buffer.viewportY < buffer.baseY) {
+    try {
+      // Markers are placed relative to the cursor, so an absolute row has to
+      // be expressed as a distance from it.
+      anchor = entry.term.registerMarker(
+        buffer.viewportY - (buffer.baseY + buffer.cursorY)
+      );
+    } catch {
+      anchor = null;
+    }
+  }
+
+  try {
+    change();
+  } finally {
+    if (anchor) {
+      // A disposed marker reports -1: the line it was watching fell out of the
+      // scrollback, and there is nowhere left to go back to.
+      if (anchor.line >= 0) entry.term.scrollToLine(anchor.line);
+      anchor.dispose();
+    }
+  }
+}
 
 /**
  * Resize the pty to match what xterm.js just laid out.
@@ -377,13 +911,35 @@ const resizeTimers = new Map();
  * nothing, and it is the pty side that is expensive to get wrong.
  */
 function syncSize(id) {
-  const entry = terminals.get(id);
-  if (!entry || entry.view.offsetParent === null) return;
-  try {
-    entry.fit.fit();
-  } catch {
-    return;
+  // Every terminal, not only the one on screen.
+  //
+  // They all occupy the same box, so a change to that box is a change to all
+  // of them — but not the same change, because each has its own font size and
+  // therefore its own number of columns in the same number of pixels. Fitting
+  // each one to what it would actually be is what makes switching free: the
+  // terminal you arrive at is already the right size, so nothing reflows in
+  // front of you.
+  for (const [each, entry] of terminals) {
+    fitTerminal(each, entry);
   }
+  // `id` is only the one that prompted this; it has been fitted along with the
+  // rest.
+  void id;
+}
+
+/** Fit one terminal to the box, and tell its pty once the size holds still. */
+function fitTerminal(id, entry) {
+  if (!entry || entry.view.offsetParent === null) return;
+
+  let fitted = true;
+  preservingView(entry, () => {
+    try {
+      entry.fit.fit();
+    } catch {
+      fitted = false;
+    }
+  });
+  if (!fitted) return;
   if (entry.term.cols === entry.lastCols && entry.term.rows === entry.lastRows) {
     return;
   }
@@ -402,10 +958,20 @@ function syncSize(id) {
       entry.lastCols = cols;
       entry.lastRows = rows;
       invoke("resize_terminal", { id, cols, rows }).catch(() => {});
-    }, RESIZE_QUIET_MS)
+    }, resizeQuiet())
   );
 }
 
+/**
+ * Give the terminals that are not on screen the size the visible one settled
+ * on.
+ *
+ * Every terminal fills the same area, so this is the size they are going to be
+ * anyway — the only question is whether they find out now or the moment you
+ * switch to them. Later is worse: a pty resized on the way in makes ConPTY
+ * repaint its whole screen, so the terminal you just opened redraws itself in
+ * front of you, and a full-screen program draws its banner a second time.
+ */
 async function selectTerminal(id) {
   if (!terminals.has(id)) return;
   activeId = id;
@@ -422,7 +988,9 @@ async function selectTerminal(id) {
 
   // Restore whatever this terminal had beside it, then bring its own browser
   // forward and park the others.
-  els.url.value = entry.url;
+  const showing = activeTab(entry);
+  els.url.value = showing && showing.url !== HOME_PAGE ? showing.url : "";
+  renderTabs();
   applyBrowserVisibility();
 
   syncSize(id);
@@ -430,17 +998,105 @@ async function selectTerminal(id) {
   renderButtons();
 }
 
-/** Show or hide the browser column according to the active terminal. */
-function applyBrowserVisibility() {
+/**
+ * How long the browser column takes to open or close. Must match `--slide` in
+ * app.css: this side is what keeps the native browser over its slot, and the
+ * two drifting apart shows as the page stopping short of the panel.
+ */
+const SLIDE_MS = 260;
+
+/** The rAF driving the current slide, if one is running. */
+let slideFrame = 0;
+
+/** Whether the browser column was open the last time it was applied. */
+let browserWasOpen = false;
+
+/**
+ * Hold the native browser over its slot for the length of the slide.
+ *
+ * The panel is CSS and the browser is not: it is a native child surface placed
+ * from Rust, so a transition moves the hole and leaves the page behind. The
+ * only way they arrive together is to measure the slot every frame and say
+ * where it went.
+ *
+ * The slot keeps its width throughout, so this is a move rather than a resize
+ * — the page slides in whole and the window edge clips what has not landed.
+ *
+ * The terminal is refitted once, at the end. Its width is in pixels and the
+ * fit reflows the entire scrollback, so doing it per frame is the one thing
+ * here expensive enough to drop the frames this exists to smooth.
+ */
+function slideBrowser() {
+  cancelAnimationFrame(slideFrame);
+  const until = performance.now() + SLIDE_MS;
+
+  const step = () => {
+    pushBrowserBounds();
+    if (performance.now() < until) {
+      slideFrame = requestAnimationFrame(step);
+      return;
+    }
+    slideFrame = 0;
+    // The last frame lands before the transition has formally ended, so the
+    // final rectangle is taken once more rather than trusted from mid-flight.
+    requestAnimationFrame(() => {
+      pushBrowserBounds(true);
+      if (activeId !== null) syncSize(activeId);
+    });
+  };
+  slideFrame = requestAnimationFrame(step);
+}
+
+/**
+ * Show or hide the browser column according to the active terminal.
+ *
+ * `animate` is only true when you asked for the panel — the toggle, a link, the
+ * keyboard. Switching between terminals goes straight to the answer, because
+ * the panel arriving is news the first time and a delay every time after: a
+ * terminal that has had a page open beside it all along should look like it
+ * still does the instant you land on it, not slide it in as though it were new.
+ */
+function applyBrowserVisibility(animate = false) {
   const entry = activeId === null ? null : terminals.get(activeId);
   const open = !!entry && entry.browserOpen;
+  const slid = animate && open !== browserWasOpen;
+  browserWasOpen = open;
 
   els.app.classList.toggle("browser-closed", !open);
   els.browserBtn.classList.toggle("on", open);
+  applyLoading();
+
+  // The bar stays up for as long as the panel does. It used to collapse to a
+  // hover strip so a browser opened as the page and nothing else, which was
+  // right when the bar held only an address — but it now holds the way out of
+  // the panel, and a close button you have to find by hovering is not one.
+  setChrome(open);
+
+  // Only a change of state moves anything. Switching between two terminals
+  // that both have a browser swaps which page is over the slot without the
+  // column going anywhere, and chasing a panel that is not moving for a
+  // quarter of a second is work for nothing.
+  if (slid) {
+    slideBrowser();
+    return;
+  }
+
+  // Nothing is animating, so stop anything that still is.
+  //
+  // A slide left running belongs to a state that no longer exists, and while
+  // one is running the bounds are sent unclamped — that is what lets a page
+  // hang off the window edge and slide in. Switching terminals part way
+  // through an open then applied those unclamped bounds to a terminal whose
+  // browser is shut, which is a page appearing where there should be none.
+  cancelAnimationFrame(slideFrame);
+  slideFrame = 0;
 
   // Layout has to settle before the slot's rectangle is worth measuring.
+  // Forced: this runs when the panel opens or the terminal changes, and both
+  // can land on a rectangle identical to the last one with a different page
+  // behind it.
   requestAnimationFrame(() => {
-    pushBrowserBounds();
+    pushBrowserBounds(true);
     if (activeId !== null) syncSize(activeId);
   });
 }
@@ -459,27 +1115,49 @@ async function openInBrowserPanel(id, url) {
 
   if (id !== activeId) await selectTerminal(id);
 
+  // A link opens a new tab rather than replacing the page you are on. The
+  // whole reason for having tabs is that following something from a terminal
+  // should not cost you what you were already reading.
+  if (!(await addTab(entry, url))) return;
+
   if (!entry.browserOpen) {
     entry.browserOpen = true;
-    applyBrowserVisibility();
+    applyBrowserVisibility(true);
     renderButtons();
-    saveLayoutSoon();
   }
+  renderTabs();
+  saveLayoutSoon();
 
   els.url.value = url;
   await go();
 }
 
-function toggleBrowser() {
+async function toggleBrowser() {
   if (activeId === null) return;
   const entry = terminals.get(activeId);
   entry.browserOpen = !entry.browserOpen;
+
+  // Opening a panel with no pages in it needs one to show.
+  if (entry.browserOpen && !tabsOf(entry).length) {
+    if (!(await addTab(entry))) {
+      entry.browserOpen = false;
+      return;
+    }
+  }
+
   // Closing puts the bar away too, so the next browser opens as bare as the
   // first one did.
   if (!entry.browserOpen) setChrome(false);
-  applyBrowserVisibility();
+  applyBrowserVisibility(true);
   renderButtons();
+  renderTabs();
   saveLayoutSoon();
+
+  // Opening one with nothing in it means you are about to go somewhere, so
+  // the address bar comes out with the caret already in it rather than
+  // leaving you to find it.
+  const tab = activeTab(entry);
+  if (entry.browserOpen && tab && tab.url === HOME_PAGE) openAddressBar();
 }
 
 // ------------------------------------------------------------- window frame
@@ -549,8 +1227,10 @@ function setChrome(shown) {
   // Measured after the bar has actually changed height. The bar's height is
   // deliberately not transitioned so that one frame is enough; the second
   // pass is insurance against anything else in the column reflowing late.
-  requestAnimationFrame(pushBrowserBounds);
-  setTimeout(pushBrowserBounds, 60);
+  // Wrapped, not passed by reference: requestAnimationFrame hands its callback
+  // a timestamp, which would arrive as the `force` argument.
+  requestAnimationFrame(() => pushBrowserBounds(true));
+  setTimeout(() => pushBrowserBounds(true), 60);
 }
 
 /** Bring the bar down with the caret in it, opening the browser if closed. */
@@ -559,7 +1239,7 @@ function openAddressBar() {
   const entry = terminals.get(activeId);
   if (!entry.browserOpen) {
     entry.browserOpen = true;
-    applyBrowserVisibility();
+    applyBrowserVisibility(true);
     renderButtons();
   }
   setChrome(true);
@@ -683,54 +1363,68 @@ function beginRename(id, labelEl) {
  * inside a program waiting for you are what a terminal is doing nearly all the
  * time, and marking those marks everything.
  */
-function stateClass(info) {
-  if (!info.alive) return "state dead";
-  if (info.busy) return "state busy";
-  return "state";
-}
-
 /**
- * The line under the name, and nothing at all unless it is worth reading.
+ * How long the dots keep going after the work does.
  *
- * "idle" and "waiting" are the states a terminal is in almost all the time, so
- * printing them next to every name is a word you read once and then stop
- * seeing, while still paying for the line it sits on.
+ * A command is not a steady stream of output — it is bursts with gaps, and the
+ * gaps are longer than the thing that measures them. Without a hold the dots
+ * flicker on and off through a single build, which reads as something being
+ * wrong rather than as something being underway. The hold costs nothing: a
+ * terminal that finished five seconds ago is not one you were about to act on.
  */
-function statusText(info, entry) {
-  if (!info.alive) return info.status;
-  // A program's own title is usually more specific than its process name.
-  if (info.busy) return entry && entry.shellTitle ? entry.shellTitle : info.status;
+const BUSY_HOLD_MS = 5000;
+
+/** What a row should be showing at its right-hand end, if anything. */
+function wantedState(info) {
+  if (!info.alive) return "dead";
+
+  // Shown on the terminal you are looking at as well as the ones you are not.
+  // The argument for hiding it was that the output is already on screen, but a
+  // row that only lights up for other terminals means the one you are in is the
+  // one you cannot tell the state of at a glance — and it makes the rail read
+  // differently depending on where you happen to be standing.
+  const entry = terminals.get(info.id);
+  const heldOver =
+    entry && entry.busyAt && performance.now() - entry.busyAt < BUSY_HOLD_MS;
+  if (info.busy || heldOver) return "working";
   return "";
 }
+
 
 /**
  * What sits at the right-hand end of a row, if anything.
  *
- * One slot, so these can never collide: work in progress outranks unread
- * output, which outranks the note that a browser is open beside it.
+ * Only whether work is happening. A count of lines printed since you last
+ * looked is not something anyone acts on: a build that prints nothing and a
+ * build that prints ten thousand lines are the same event, and the number was
+ * loudest exactly when it meant least. What is worth a mark is a terminal
+ * doing something, which the spinner already says.
  */
-function rightSlot(info, entry) {
-  if (info.busy || !info.alive) {
-    return svgIcon("#i-spin", stateClass(info));
-  }
-  if (entry && entry.unread > 0 && info.id !== activeId) {
-    const badge = document.createElement("span");
-    badge.className = "unread";
-    badge.textContent = entry.unread > 99 ? "99+" : String(entry.unread);
-    badge.title = `${entry.unread} new lines`;
-    return badge;
-  }
-  return null;
-}
+function updateRightSlot(row, info) {
+  const wanted = wantedState(info);
+  const current = row.querySelector(".state");
 
-/** An <svg><use> pair. SVG elements need createElementNS, not createElement. */
-function svgIcon(id, cls) {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("class", cls);
-  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
-  use.setAttribute("href", id);
-  svg.appendChild(use);
-  return svg;
+  // The important line in this function. If the row is already showing what it
+  // should be showing, it is left completely alone — because replacing it, or
+  // even removing and re-adding the same thing, restarts the animation. This
+  // runs several times a second, so anything else means the dots never get
+  // past their first frame.
+  if ((current ? current.dataset.state : "") === wanted) return;
+
+  if (current) current.remove();
+  if (!wanted) return;
+
+  const el = document.createElement("span");
+  el.className = `state ${wanted}`;
+  el.dataset.state = wanted;
+  // Three for work in progress, which is what makes it read as a rhythm rather
+  // than as a thing that is simply on. One for a shell that has exited, which
+  // is a state and not a process.
+  const dots = wanted === "working" ? 3 : 1;
+  for (let i = 0; i < dots; i++) {
+    el.appendChild(document.createElement("i"));
+  }
+  row.appendChild(el);
 }
 
 // ------------------------------------------------------- rail context menu
@@ -823,28 +1517,63 @@ function renderButtons() {
     ? infos.filter((i) => displayName(i).toLowerCase().includes(needle))
     : infos;
 
-  els.list.innerHTML = "";
+  // Rows are updated in place, never rebuilt.
+  //
+  // This runs several times a second, and clearing the list first is what made
+  // the working indicator restart before it had finished a single cycle:
+  // taking an element out of the document cancels its animation, and putting a
+  // new one back starts a new one from zero. Three dots that never got past
+  // the first is what "it keeps refreshing" was.
+  //
+  // Keeping the rows also means the rail stops being rebuilt hundreds of times
+  // a second while a terminal is producing output.
+  const existing = new Map(
+    [...els.list.children]
+      .filter((el) => el.dataset && el.dataset.id)
+      .map((el) => [el.dataset.id, el])
+  );
+
+  els.list.querySelectorAll(".rail-empty").forEach((el) => el.remove());
 
   if (!shown.length) {
+    for (const el of existing.values()) el.remove();
     const empty = document.createElement("div");
     empty.className = "rail-empty";
     empty.textContent = infos.length ? "No terminal matches." : "No terminals.";
     els.list.appendChild(empty);
   }
 
+  const wanted = new Set(shown.map((i) => String(i.id)));
+  for (const [key, el] of existing) {
+    if (!wanted.has(key)) el.remove();
+  }
+
+  let previous = null;
   for (const info of shown) {
-    const entry = terminals.get(info.id);
-    const row = document.createElement("div");
+    const key = String(info.id);
+    let row = existing.get(key);
+    let name;
+
+    if (row) {
+      name = row.querySelector(".name");
+    } else {
+      row = document.createElement("div");
+      row.tabIndex = 0;
+      row.dataset.id = key;
+      name = document.createElement("span");
+      name.className = "name";
+      row.append(name);
+      existing.set(key, row);
+    }
+
     row.className = "term-btn" + (info.id === activeId ? " active" : "");
-    row.tabIndex = 0;
-    row.dataset.id = String(info.id);
 
-    const name = document.createElement("span");
-    name.className = "name";
-    name.textContent = displayName(info);
+    const label = displayName(info);
+    if (name.textContent !== label) name.textContent = label;
 
-    // Click the name of the terminal you are already in to rename it; double
-    // click works from anywhere.
+    // Rebound every pass because they close over `info`, which is a new object
+    // each time even when the row it describes is the same one.
+    //
     // A click on the terminal you are already in is a rename: there is nothing
     // else for it to mean, and requiring the pointer to land exactly on the
     // text made a rename something you had to aim for.
@@ -875,22 +1604,12 @@ function renderButtons() {
       openRowMenu(info.id, e.clientX, e.clientY);
     };
 
-    row.append(name);
+    updateRightSlot(row, info);
 
-    // Left out entirely rather than left empty, so a quiet row is one line
-    // instead of one line and a gap.
-    const label = statusText(info, entry);
-    if (label) {
-      const status = document.createElement("span");
-      status.className = "status";
-      status.textContent = label;
-      row.appendChild(status);
-    }
-
-    const right = rightSlot(info, entry);
-    if (right) row.appendChild(right);
-
-    els.list.appendChild(row);
+    // Put it where it belongs without touching it if it is already there.
+    const shouldFollow = previous ? previous.nextSibling : els.list.firstChild;
+    if (row !== shouldFollow) els.list.insertBefore(row, shouldFollow);
+    previous = row;
   }
 
   // The title bar says nothing about which terminal is active: the rail
@@ -909,9 +1628,14 @@ async function refresh() {
 }
 
 function applyInfos(infos) {
+  const now = performance.now();
   for (const info of infos) {
     const entry = terminals.get(info.id);
-    if (entry) entry.info = info;
+    if (!entry) continue;
+    entry.info = info;
+    // When it was last genuinely working, so the dots can outlast the gaps
+    // between one command's bursts of output. See BUSY_HOLD_MS.
+    if (info.busy) entry.busyAt = now;
   }
   renderButtons();
 }
@@ -926,14 +1650,47 @@ let boundsTimer = null;
 
 let boundsFailed = false;
 
-function pushBrowserBounds() {
+/**
+ * @param force true when what is being shown has actually changed — a tab, a
+ *              terminal, the panel opening. Rust skips identical layouts, and
+ *              this is what tells it not to.
+ */
+function pushBrowserBounds(force = false) {
   const r = els.slot.getBoundingClientRect();
+
+  // The slot is deliberately a fixed width and deliberately allowed to hang
+  // out of a panel narrower than itself: that overhang is what lets the page
+  // slide in whole instead of being resized on every frame.
+  //
+  // It is only ever correct while the panel is moving. When the layout simply
+  // cannot give the panel its full width — a wide rail and a narrow window
+  // leave less room than the browser was set to — the same overhang is a page
+  // shoved off the side of the window, with the rest of the app laid out as
+  // though nothing were wrong, because a rectangle does not know it was
+  // clipped. So outside the slide, what gets sent is the part actually inside
+  // the window.
+  let { left, top, width, height } = { left: r.left, top: r.top, width: r.width, height: r.height };
+  if (!slideFrame) {
+    const right = Math.min(left + width, window.innerWidth);
+    const bottom = Math.min(top + height, window.innerHeight);
+    left = Math.max(left, 0);
+    top = Math.max(top, 0);
+    width = Math.max(0, right - left);
+    height = Math.max(0, bottom - top);
+  }
+
+  // Which page is over the slot is a tab, not a terminal: a terminal may have
+  // several, and only one of them is the one you are looking at.
+  const entry = activeId === null ? null : terminals.get(activeId);
+  const showing = entry && entry.browserOpen ? activeTab(entry) : null;
+
   invoke("browser_layout", {
-    active: activeId,
-    x: r.left,
-    y: r.top,
-    width: r.width,
-    height: r.height,
+    active: showing ? showing.id : null,
+    x: left,
+    y: top,
+    width,
+    height,
+    force,
   })
     .then((hasBrowser) => {
       // Browsers come from a fixed pool, so a terminal can legitimately have
@@ -952,28 +1709,34 @@ function pushBrowserBounds() {
 
 function scheduleBounds() {
   clearTimeout(boundsTimer);
-  boundsTimer = setTimeout(pushBrowserBounds, 16);
+  // Wrapped for the same reason as the others: a bare reference would take
+  // whatever the scheduler chose to pass it as `force`.
+  boundsTimer = setTimeout(() => pushBrowserBounds(), 16);
 }
 
 async function go() {
   if (activeId === null) return;
-  const id = activeId;
+  const entry = terminals.get(activeId);
+  if (!entry) return;
+  const tab = activeTab(entry) || (await addTab(entry));
+  if (!tab) return;
   try {
-    const full = await invoke("browser_navigate", { id, url: els.url.value });
+    const full = await invoke("browser_navigate", { tab: tab.id, url: els.url.value });
     els.url.value = full;
-    const entry = terminals.get(id);
-    if (entry) entry.url = full;
+    tab.url = full;
+    tab.title = "";
+    renderTabs();
     els.url.blur();
-    terminals.get(id)?.term.focus();
+    entry.term.focus();
   } catch (e) {
     showError("browser", e);
   }
 }
 
 function history(action) {
-  if (activeId !== null) {
-    invoke("browser_history", { id: activeId, action }).catch(console.error);
-  }
+  const entry = activeId === null ? null : terminals.get(activeId);
+  const tab = entry && activeTab(entry);
+  if (tab) invoke("browser_history", { tab: tab.id, action }).catch(console.error);
 }
 
 // ------------------------------------------------------------- session state
@@ -992,6 +1755,95 @@ function saveLayoutSoon() {
   saveTimer = setTimeout(saveLayout, 400);
 }
 
+/**
+ * How much of each terminal is written to disk, in lines.
+ *
+ * Lines rather than bytes because that is the unit the buffer is in, and what
+ * you mean by "how far back does it go" is a number of lines.
+ */
+const SAVED_LINES = 3000;
+
+/**
+ * What a terminal looked like, as text that can be written back into one.
+ *
+ * The buffer is serialized rather than the pty output being kept, because the
+ * two are not the same thing and only one of them replays. What arrives from
+ * ConPTY is a stream of instructions — move to row 4, erase to end of line,
+ * hide the cursor — and it is written against the screen that existed when it
+ * was sent. Feeding it to an empty terminal later does not reproduce that
+ * screen; it repeats the drawing, out of order and against the wrong contents.
+ * ConPTY also redraws everything on every resize, so most of that stream is
+ * copies of a screen you already had rather than anything you did.
+ *
+ * The buffer is the result of all that, already worked out, and writing it
+ * back is the one thing that gives you the terminal you were looking at.
+ */
+/**
+ * A serialized row with nothing on it: escape sequences and spaces only.
+ *
+ * Blank is about what the row shows, not what it contains. A row the shell
+ * painted a background across still carries the codes for it, and a row the
+ * cursor merely passed through carries the reset.
+ */
+const BLANK_ROW =
+  /^(?:\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|[ \r])*$/;
+
+/**
+ * Drop the rows below the cursor from a snapshot.
+ *
+ * The serializer writes the whole screen and then walks the cursor back up to
+ * where it belongs, so ten lines of output in a sixty-row window comes out as
+ * ten lines, fifty empty ones, and a climb of fifty. Replayed into a fresh
+ * terminal those fifty are no longer padding: they are rows, and the next save
+ * writes them back with another screen's worth underneath. Restart often
+ * enough and the buffer is mostly nothing, which the scrollbar then has to
+ * represent — a page of output with a thumb sized for a thousand rows.
+ *
+ * Nothing is below them by definition, so dropping them loses nothing, and the
+ * climb they were padding for shrinks by exactly the number dropped.
+ */
+function trimBelowCursor(text) {
+  const lines = text.split("\n");
+  if (lines.length < 2) return text;
+
+  // The last line is the cursor restore, and the climb is the first thing in
+  // it. No climb means the cursor was already on the last row, which is the
+  // case where there is nothing under it to drop.
+  const last = lines[lines.length - 1];
+  const climbed = /^\x1b\[(\d+)A/.exec(last);
+  if (!climbed) return text;
+
+  let blank = 0;
+  while (
+    blank < lines.length - 1 &&
+    BLANK_ROW.test(lines[lines.length - 2 - blank])
+  ) {
+    blank++;
+  }
+  if (!blank) return text;
+
+  // Never climb past the row the cursor was actually on: if it was sitting
+  // inside the empty run, only the part below it goes.
+  const climb = Number(climbed[1]);
+  const drop = Math.min(blank, climb);
+  const left = climb - drop;
+  const rest = last.slice(climbed[0].length);
+
+  return [
+    ...lines.slice(0, lines.length - 1 - drop),
+    left > 0 ? `\x1b[${left}A${rest}` : rest,
+  ].join("\n");
+}
+
+function snapshotOf(entry) {
+  try {
+    return trimBelowCursor(entry.serializer.serialize({ scrollback: SAVED_LINES }));
+  } catch (e) {
+    logInfo(`serialize failed: ${e}`);
+    return "";
+  }
+}
+
 function saveLayout() {
   const order = [...terminals.keys()];
   return invoke("save_layout", {
@@ -1003,7 +1855,20 @@ function saveLayout() {
           id,
           name: e.customName,
           browserOpen: e.browserOpen,
-          url: e.url || "",
+          // Every page open beside this terminal, so reopening the window puts
+          // the same set back rather than one of them.
+          tabs: tabsOf(e).map((t) => t.url || ""),
+          // The one that was on top. Written as an index because tab ids are
+          // only meaningful while the window that invented them is running.
+          activeTab: Math.max(
+            0,
+            tabsOf(e).findIndex((t) => t.id === e.activeTab)
+          ),
+          scrollback: snapshotOf(e),
+          // Serialized text is a grid. It has to go back into one the same
+          // width or every wrapped line breaks in a different place.
+          cols: e.term.cols,
+          rows: e.term.rows,
         };
       }),
     },
@@ -1011,10 +1876,91 @@ function saveLayout() {
 }
 
 /**
+ * Sit back down in front of terminals that never stopped running.
+ *
+ * The warm path, and the ordinary one. The shells belong to the daemon, not to
+ * this window, so most of the time closing and reopening mux does not restore
+ * anything: the terminals are still there, mid-command, and all that is needed
+ * is a view onto each. `makeTerminal` attaches and writes back everything that
+ * happened while nobody was looking.
+ *
+ * What is still taken from the session file is what the daemon has no opinion
+ * about — what you renamed a terminal to, and which page was open beside it.
+ */
+async function attachToLive(live, saved) {
+  const byId = new Map((saved?.terminals ?? []).map((t) => [t.id, t]));
+  let first = null;
+
+  for (const info of live) {
+    const remembered = byId.get(info.id) || {};
+    const entry = makeTerminal(info.id, {
+      cols: info.cols > 0 ? info.cols : 80,
+      rows: info.rows > 0 ? info.rows : 24,
+    });
+    entry.customName = remembered.name || null;
+    await restoreTabs(entry, remembered);
+    if (first === null) first = info.id;
+  }
+
+  await refresh();
+  // The one that was in front, not merely the first in the list.
+  const wanted = saved && saved.active;
+  await selectTerminal(terminals.has(wanted) ? wanted : first);
+}
+
+/**
+ * Put a terminal's pages back.
+ *
+ * Claiming happens here rather than at save time because a browser is a live
+ * webview from a fixed pool: which ones are free is only known now. A session
+ * saved with more tabs than the pool can serve comes back with as many as fit,
+ * in order, rather than failing to open at all.
+ */
+async function restoreTabs(entry, remembered) {
+  const urls = Array.isArray(remembered.tabs) && remembered.tabs.length
+    ? remembered.tabs
+    : remembered.url
+      ? [remembered.url]
+      : [];
+
+  for (const url of urls) {
+    const tab = await addTab(entry, url || HOME_PAGE);
+    if (!tab) break;
+    // Actually load it, rather than only remembering the address.
+    //
+    // A tab that knows where it should be but whose browser is still on the
+    // new tab page is worse than not restoring it: the poll that keeps the
+    // address bar honest asks the browser where it is, is told the new tab
+    // page, and writes that back over the address the session file just
+    // supplied. The tab then loses its identity a second after being restored.
+    if (url && url !== HOME_PAGE) {
+      try {
+        await invoke("browser_navigate", { tab: tab.id, url });
+      } catch (e) {
+        logInfo(`could not reopen ${url}: ${e}`);
+      }
+    }
+  }
+
+  const tabs = tabsOf(entry);
+  const at = Math.min(remembered.activeTab || 0, Math.max(0, tabs.length - 1));
+  entry.activeTab = tabs.length ? tabs[at].id : null;
+
+  // Only if there is a page in it. A browser left on the new tab page comes
+  // back as half a window of search box next to a terminal it has nothing to
+  // do with.
+  const showing = activeTab(entry);
+  entry.browserOpen =
+    !!remembered.browserOpen && !!showing && showing.url !== HOME_PAGE;
+}
+
+/**
  * Bring back the terminals from last time, or start one if there were none.
  *
- * Each restored terminal is a fresh shell in the directory the old one was
- * last working in, with the previous session's output replayed above it and a
+ * The cold path, reached only when the daemon is holding nothing: the first
+ * ever run, or after the machine restarted, which is the one thing no daemon
+ * survives. Each terminal is then a fresh shell in the directory the old one
+ * was working in, with the previous session's output replayed above it and a
  * rule to say where the old ends and the new begins. Restoring the text but
  * silently starting somewhere else would be the worst of both.
  */
@@ -1026,6 +1972,18 @@ async function restoreOrStart() {
     logInfo(`load_layout failed, starting fresh: ${e}`);
   }
 
+  // Ask what is already running before deciding to rebuild anything.
+  let live = [];
+  try {
+    live = await invoke("list_terminals");
+  } catch (e) {
+    logInfo(`could not ask the daemon what exists: ${e}`);
+  }
+  if (live.length) {
+    await attachToLive(live, saved);
+    return;
+  }
+
   const wanted = saved && Array.isArray(saved.terminals) ? saved.terminals : [];
   if (!wanted.length) {
     await newTerminal();
@@ -1035,21 +1993,25 @@ async function restoreOrStart() {
   let firstId = null;
   for (const t of wanted) {
     try {
+      // The size it was, so the shell's first prompt is drawn at the width the
+      // text above it was drawn at, and ConPTY is not handed a resize before
+      // anyone has typed anything.
+      const cols = t.cols > 0 ? t.cols : 80;
+      const rows = t.rows > 0 ? t.rows : 24;
       const id = await withTimeout(
         invoke("restore_terminal", {
           shell: t.shell || null,
           cwd: t.cwd || null,
           scrollback: t.scrollback || "",
-          cols: 80,
-          rows: 24,
+          cols,
+          rows,
         }),
         10000,
         "restore_terminal"
       );
-      const entry = makeTerminal(id);
+      const entry = makeTerminal(id, { cols, rows });
       entry.customName = t.name || null;
-      entry.browserOpen = !!t.browserOpen;
-      entry.url = t.url || HOME_PAGE;
+      await restoreTabs(entry, t);
       if (firstId === null) firstId = id;
     } catch (e) {
       showError("restore terminal", e);
@@ -1057,7 +2019,10 @@ async function restoreOrStart() {
   }
 
   await refresh();
-  if (firstId !== null) await selectTerminal(firstId);
+  // Which terminal you were looking at is part of where you left off.
+  const wasActive = saved && saved.active;
+  if (terminals.has(wasActive)) await selectTerminal(wasActive);
+  else if (firstId !== null) await selectTerminal(firstId);
   else await newTerminal();
 }
 
@@ -1121,28 +2086,103 @@ async function checkForUpdate() {
 
 // -------------------------------------------------------------- splitters
 
+/**
+ * Put back the widths the splitters were last left at.
+ *
+ * Dragging a panel to the size you want it and finding it back at the default
+ * next time is the kind of thing you stop bothering to do. Stored per variable
+ * name, so adding a third splitter needs nothing here.
+ */
+function restorePanelWidths() {
+  for (const name of ["--rail-w", "--browser-w"]) {
+    const saved = Number(localStorage.getItem(`mux${name}`));
+    if (saved > 0) {
+      document.documentElement.style.setProperty(name, `${saved}px`);
+    }
+  }
+}
+
+/**
+ * Stop the side panels from taking a window they no longer fit in.
+ *
+ * The widths are remembered, and a width that was reasonable on one screen is
+ * not reasonable on another: a rail dragged to seven hundred pixels on a large
+ * monitor, restored on a laptop, leaves the terminal with nothing. The grid
+ * already refuses to let the terminal go below its floor, but that only stops
+ * it disappearing — it does not stop both panels being absurd.
+ *
+ * Neither side may exceed this share of the window, so the terminal always has
+ * at least the rest. Applied on startup and on every resize, because a window
+ * can be dragged onto a smaller screen as easily as opened on one.
+ */
+const MAX_PANEL_SHARE = 0.4;
+
+function fitPanelsToWindow() {
+  const ceiling = Math.max(160, Math.floor(window.innerWidth * MAX_PANEL_SHARE));
+  const root = document.documentElement;
+  for (const name of ["--rail-w", "--browser-w"]) {
+    const current = parseFloat(getComputedStyle(root).getPropertyValue(name));
+    if (current > ceiling) {
+      root.style.setProperty(name, `${ceiling}px`);
+      // Written back, or the next launch restores the size that did not fit.
+      try {
+        localStorage.setItem(`mux${name}`, String(ceiling));
+      } catch {}
+    }
+  }
+}
+
 function makeSplitter(el, varName, opts) {
   let dragging = false;
 
   el.addEventListener("mousedown", (e) => {
     dragging = true;
     el.classList.add("dragging");
+    // The column widths are transitioned, and a hand already moving them does
+    // not want to be eased: the panel would trail the pointer by the length of
+    // the slide. See `.app.dragging`.
+    els.app.classList.add("dragging");
+    // Out of the way for the duration. A native browser cannot be clipped by
+    // the chrome, so leaving it in place while the columns move would have it
+    // sitting over whatever the drag has just uncovered.
+    invoke("browser_layout", { active: null, x: 0, y: 0, width: 0, height: 0 }).catch(
+      () => {}
+    );
     e.preventDefault();
   });
 
   window.addEventListener("mousemove", (e) => {
     if (!dragging) return;
-    const w = opts.fromRight ? window.innerWidth - e.clientX : e.clientX;
+    // Asked each time rather than captured once: the side a panel is on can
+    // change while the app is running.
+    const fromRight =
+      typeof opts.fromRight === "function" ? opts.fromRight() : opts.fromRight;
+    const w = fromRight ? window.innerWidth - e.clientX : e.clientX;
     const clamped = Math.max(opts.min, Math.min(opts.max, w));
     document.documentElement.style.setProperty(varName, `${clamped}px`);
-    scheduleBounds();
-    if (activeId !== null) syncSize(activeId);
+    try {
+      localStorage.setItem(`mux${varName}`, String(clamped));
+    } catch {}
+    // Deliberately not refitting the terminal here, and deliberately not
+    // moving the browser either.
+    //
+    // Both were happening on every mousemove, and both are expensive in the
+    // same way: a refit reflows the whole scrollback, which is fifty thousand
+    // lines, and moving the browser resizes a native webview through an IPC
+    // call. Sixty of each a second is why dragging felt like dragging
+    // something heavy.
+    //
+    // The columns themselves are CSS and follow the pointer instantly. The
+    // terminal is clipped to its panel for the length of the drag, the browser
+    // is parked, and both are put right once on release — which is the only
+    // size either of them was ever worth doing the work for.
   });
 
   window.addEventListener("mouseup", () => {
     if (!dragging) return;
     dragging = false;
     el.classList.remove("dragging");
+    els.app.classList.remove("dragging");
     scheduleBounds();
     if (activeId !== null) syncSize(activeId);
   });
@@ -1155,6 +2195,37 @@ async function main() {
 
   els.newBtn.onclick = () => newTerminal().catch((e) => showError("new terminal", e));
   els.browserBtn.onclick = toggleBrowser;
+
+  els.tabNew.onclick = async () => {
+    if (activeId === null) return;
+    const entry = terminals.get(activeId);
+    if (!(await addTab(entry))) return;
+    if (!entry.browserOpen) {
+      entry.browserOpen = true;
+      applyBrowserVisibility(true);
+      renderButtons();
+    }
+    renderTabs();
+    applyBrowserVisibility();
+    saveLayoutSoon();
+    // A new tab is a page you are about to choose, so the caret goes where
+    // you would have had to click anyway.
+    openAddressBar();
+  };
+  els.settingsBtn.onclick = (e) => {
+    // Or the document listener below would shut it again on the way past.
+    e.stopPropagation();
+    if (els.settingsMenu.hidden) openSettings();
+    else closeSettings();
+  };
+  els.settingsMenu.onclick = (e) => e.stopPropagation();
+  document.getElementById("browser-close").onclick = toggleBrowser;
+
+  // Before anything is measured: the columns decide where the browser goes and
+  // how wide the terminal is, and both are worked out from the laid-out DOM.
+  restorePanelWidths();
+  fitPanelsToWindow();
+  applyMirror();
   document.getElementById("err-close").onclick = () => (els.err.hidden = true);
 
   // mux has a browser in it, so the release notes can open beside the terminal
@@ -1164,12 +2235,31 @@ async function main() {
     const entry = terminals.get(activeId);
     if (!entry.browserOpen) {
       entry.browserOpen = true;
-      applyBrowserVisibility();
+      applyBrowserVisibility(true);
       renderButtons();
     }
     els.url.value = RELEASES_PAGE;
     await go();
   };
+
+  /**
+   * Open or shut the search.
+   *
+   * Shutting always clears it. A collapsed box still filtering the list is a
+   * list that is missing terminals for a reason you cannot see.
+   */
+  const setSearchOpen = (open) => {
+    els.railHead.classList.toggle("open", open);
+    if (open) {
+      els.filter.focus();
+      return;
+    }
+    els.filter.value = "";
+    filterText = "";
+    renderButtons();
+  };
+
+  els.filterBtn.onclick = () => setSearchOpen(true);
 
   els.filter.addEventListener("input", () => {
     filterText = els.filter.value;
@@ -1178,17 +2268,22 @@ async function main() {
   els.filter.addEventListener("keydown", (e) => {
     e.stopPropagation();
     if (e.key === "Escape") {
-      els.filter.value = "";
-      filterText = "";
-      renderButtons();
+      setSearchOpen(false);
       els.filter.blur();
     }
+  });
+  // Clicking away puts it back, but only when nothing was typed: leaving a
+  // search you are still reading the results of would be its own annoyance.
+  els.filter.addEventListener("blur", () => {
+    if (!els.filter.value) setSearchOpen(false);
   });
 
   // Any click anywhere puts the context menu away, including the one that
   // chose an item from it.
   document.addEventListener("click", closeRowMenu);
   window.addEventListener("blur", closeRowMenu);
+  document.addEventListener("click", closeSettings);
+  window.addEventListener("blur", closeSettings);
 
   els.url.value = HOME_PAGE;
   els.url.addEventListener("keydown", (e) => {
@@ -1197,15 +2292,14 @@ async function main() {
     if (e.key === "Escape") closeAddressBar();
   });
 
-  // Reach the top edge of the page and the bar comes down; leave it and it
-  // goes away again, unless the caret is in it.
-  els.browserBar.addEventListener("mouseenter", () => setChrome(true));
-  els.browserBar.addEventListener("mouseleave", () => {
-    if (document.activeElement !== els.url) setChrome(false);
-  });
-  els.url.addEventListener("blur", () => {
-    if (!els.browserBar.matches(":hover")) setChrome(false);
-  });
+  // The bar no longer hides itself.
+  //
+  // It used to collapse to a strip the moment the pointer left it, on the
+  // argument that a browser should be the page and nothing else. That was true
+  // when the bar held only an address. It now holds the address you are on,
+  // the way back out of the panel, and the tabs sit above it — none of which
+  // are worth hunting for by hovering, and an address you can only see by
+  // pointing at it is an address you cannot read while you work.
 
   // The keyboard route, for when the pointer is in the terminal. Ctrl+L stays
   // the shell's.
@@ -1214,21 +2308,29 @@ async function main() {
       e.preventDefault();
       openAddressBar();
     }
-    if (e.key === "Escape") closeRowMenu();
+    if (e.key === "Escape") {
+      closeRowMenu();
+      closeSettings();
+    }
   });
   document.getElementById("back-btn").onclick = () => history("back");
   document.getElementById("fwd-btn").onclick = () => history("forward");
   document.getElementById("reload-btn").onclick = () => history("reload");
 
+  // The rail's ceiling is high because a terminal named after what it is doing
+  // is a sentence, not a word, and a rail too narrow to read one is a rail you
+  // have to hover to use.
   makeSplitter(document.getElementById("split-term"), "--rail-w", {
     min: 170,
-    max: 380,
-    fromRight: false,
+    max: 720,
+    // Which edge a drag is measured from is the side the panel is on, and that
+    // is exactly what swapping sides changes.
+    fromRight: () => mirrored,
   });
   makeSplitter(document.getElementById("split-browser"), "--browser-w", {
     min: 0,
-    max: 900,
-    fromRight: true,
+    max: 1200,
+    fromRight: () => !mirrored,
   });
 
   // Output for ANY terminal is applied, not just the visible one — that is
@@ -1243,29 +2345,133 @@ async function main() {
 
   await listen("terminals", (event) => applyInfos(event.payload));
 
+  // The terminals live in another process. If that process goes, every one of
+  // them is gone with it, and a window full of panes that quietly stopped being
+  // connected to anything is the worst way to find out.
+  await listen("daemon-error", (event) => showError("daemon", event.payload));
+
+  // Every terminal's browser reports its own loading, whether or not you are
+  // looking at it, so the state is kept per terminal and only the active one
+  // is drawn. Switching to a terminal whose page is still coming in shows the
+  // bar straight away rather than waiting for the next thing to happen.
+  await listen("browser-loading", async (event) => {
+    const { tab: tabId, loading } = event.payload;
+
+    // Find whose tab this is. The event names a page, and only this side knows
+    // which terminal that page belongs to.
+    let owner = null;
+    let tab = null;
+    for (const [id, entry] of terminals) {
+      const found = tabsOf(entry).find((t) => t.id === tabId);
+      if (found) {
+        owner = id;
+        tab = found;
+        break;
+      }
+    }
+    if (!tab) return;
+
+    tab.loading = loading;
+    if (owner !== null) {
+      const entry = terminals.get(owner);
+      entry.loading = tabsOf(entry).some((t) => t.loading);
+      if (owner === activeId) applyLoading();
+    }
+
+    // A finished page is the moment its address is finally true, so the tab is
+    // named then rather than waiting for the next poll — which may not come
+    // for a second, or at all while the address bar has focus.
+    if (!loading) {
+      try {
+        const u = await invoke("browser_url", { tab: tabId });
+        if (u && u !== tab.url) {
+          tab.url = u;
+          renderTabs();
+        }
+      } catch {}
+    }
+  });
+
   window.addEventListener("resize", () => {
+    fitPanelsToWindow();
     scheduleBounds();
     if (activeId !== null) syncSize(activeId);
   });
 
   // Ctrl+scroll to resize the text. The whole font UI, and it adds no chrome.
+  //
+  // Captured on the way down rather than caught on the way up. The terminal's
+  // own viewport handles the wheel and stops it whenever it has somewhere to
+  // scroll, so bubbling only ever reached here at the very top or the very
+  // bottom of the scrollback — zoom appeared to work in two places and be
+  // broken everywhere else.
   els.host.addEventListener(
     "wheel",
     (e) => {
       if (!e.ctrlKey) return;
+      e.stopPropagation();
       e.preventDefault();
-      fontSize = Math.min(28, Math.max(8, fontSize + (e.deltaY < 0 ? 1 : -1)));
-      for (const [id, entry] of terminals) {
-        entry.term.options.fontSize = fontSize;
-        if (id === activeId) syncSize(id);
-      }
+      if (activeId === null) return;
+      const entry = terminals.get(activeId);
+      if (!entry) return;
+      // Only the one in front of you. The others keep whatever they were set
+      // to, which is the point of each having its own.
+      const size = Math.min(
+        28,
+        Math.max(8, fontSizeFor(activeId) + (e.deltaY < 0 ? 1 : -1))
+      );
+      rememberFontSize(activeId, size);
+      entry.term.options.fontSize = size;
+      syncSize(activeId);
     },
-    { passive: false }
+    { passive: false, capture: true }
+  );
+
+  // The same gesture over the rail, sizing the rail instead. Captured for the
+  // same reason: the list scrolls, so it would otherwise swallow the event
+  // everywhere except at the ends.
+  const RAIL_FONT_KEY = "mux.railFont";
+  let railFont = Number(localStorage.getItem(RAIL_FONT_KEY)) || 13;
+  const applyRailFont = () =>
+    document.documentElement.style.setProperty("--rail-font", `${railFont}px`);
+  applyRailFont();
+
+  document.querySelector(".rail").addEventListener(
+    "wheel",
+    (e) => {
+      if (!e.ctrlKey) return;
+      e.stopPropagation();
+      e.preventDefault();
+      // A wide range on purpose. The rail is the one part of this window whose
+      // right size depends entirely on how you are using it: a glance-at-it
+      // list of six terminals wants to be small, and a rail you are actually
+      // reading names out of on a big screen wants to be much bigger than any
+      // sensible default.
+      railFont = Math.min(40, Math.max(8, railFont + (e.deltaY < 0 ? 1 : -1)));
+      localStorage.setItem(RAIL_FONT_KEY, String(railFont));
+      applyRailFont();
+    },
+    { passive: false, capture: true }
   );
 
   await restoreOrStart();
   // Starts closed unless the restored session had one open.
   applyBrowserVisibility();
+
+  // Every terminal opens at the end of its output, not part way up it.
+  //
+  // Each one scrolls itself down as its history lands, but that happens before
+  // the window has finished deciding how big it is: the fits that follow
+  // reflow the text, and a reflow moves the bottom. Doing it once more after
+  // the layout has settled is what makes "where I left off" mean the last
+  // line rather than wherever the last reflow happened to leave the view.
+  const settle = () => {
+    for (const entry of terminals.values()) {
+      entry.term.scrollToBottom();
+    }
+  };
+  requestAnimationFrame(settle);
+  setTimeout(settle, STARTUP_SETTLE_MS + 200);
 
   try {
     maximized = await invoke("window_is_maximized");
@@ -1278,19 +2484,38 @@ async function main() {
   // ended up, including after in-page navigation we did not initiate.
   setInterval(async () => {
     if (activeId === null || document.activeElement === els.url) return;
-    const id = activeId;
+    const entry = terminals.get(activeId);
+    const tab = entry && activeTab(entry);
+    if (!tab) return;
     try {
-      const u = await invoke("browser_url", { id });
-      const entry = terminals.get(id);
-      if (entry) entry.url = u;
-      // Guard against the terminal having been switched mid-await.
-      if (id === activeId && u !== els.url.value) els.url.value = u;
+      const u = await invoke("browser_url", { tab: tab.id });
+      // An empty answer means the browser is on the new tab page, which it
+      // also is for the second or two a restored tab spends loading. Letting
+      // that clear an address the tab already has is how a tab showing a shop
+      // ends up labelled "New tab" — and if the address bar happens to have
+      // focus the poll stops running, so it never corrects itself. A tab that
+      // has been given an address only loses it by being sent home on purpose.
+      const changed = u ? tab.url !== u : false;
+      if (u) tab.url = u;
+      // Guard against the tab having been switched mid-await.
+      if (activeTab(terminals.get(activeId) || {}) === tab) {
+        // The bar shows where the tab is meant to be, not only where the
+        // browser got to. A page that failed to load — a dev server that is
+        // not running, most often — leaves the browser sitting on the new tab
+        // page, and blanking the bar to match hides the one thing that would
+        // let you retry it. The address stays, and reload does what it says.
+        const show = u || (tab.url && tab.url !== HOME_PAGE ? tab.url : "");
+        if (show !== els.url.value) els.url.value = show;
+        // The strip is named after the address, so it follows it — including
+        // when the page navigated itself and nobody here asked it to.
+        if (changed) renderTabs();
+      }
     } catch {}
   }, 1000);
 
-  // The working directory and scrollback are read by Rust at save time, so the
-  // UI only has to say which terminals exist and what they are called. Saving
-  // on a timer as well as on change means a crash loses seconds, not the lot.
+  // The working directory is filled in by Rust at save time; the text comes
+  // from here, because the buffer only exists on this side. Saving on a timer
+  // as well as on change means a crash loses seconds, not the lot.
   setInterval(saveLayout, 5000);
   window.addEventListener("beforeunload", saveLayout);
 

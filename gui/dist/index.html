@@ -11,6 +11,16 @@
     <!-- Icons are defined once and referenced with <use>, so a button is one
          short element rather than a dozen lines of path data. -->
     <svg class="sprite" aria-hidden="true">
+      <!-- The app's own mark: a prompt and the cursor under it, the same two
+           colours as the window icon. It carries its own strokes rather than
+           taking currentColor, because everything else on that bar is chrome
+           and this is the one thing that is not. -->
+      <symbol id="i-mark" viewBox="0 0 24 24">
+        <path d="M4.75 5.75 11.25 12l-6.5 6.25" fill="none" stroke="#35c47c"
+              stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M13.75 18.25h5.5" fill="none" stroke="#4a90f7"
+              stroke-width="3" stroke-linecap="round" />
+      </symbol>
       <symbol id="i-plus" viewBox="0 0 14 14">
         <path d="M7 2.5v9M2.5 7h9" />
       </symbol>
@@ -18,8 +28,26 @@
         <circle cx="6.2" cy="6.2" r="4" />
         <path d="M9.2 9.2 12 12" />
       </symbol>
+      <!-- A cog, drawn as a ring with teeth rather than a filled gear: the
+           icons here are all single-weight strokes and a solid one would read
+           as a different family. -->
+      <symbol id="i-gear" viewBox="0 0 16 16">
+        <circle cx="8" cy="8" r="2.4" />
+        <path d="M8 1.4v1.8M8 12.8v1.8M14.6 8h-1.8M3.2 8H1.4M12.7 3.3l-1.3 1.3M4.6 11.4l-1.3 1.3M12.7 12.7l-1.3-1.3M4.6 4.6 3.3 3.3" />
+      </symbol>
+      <!-- A divider with the two halves leaving it in opposite directions:
+           what the button does, rather than a left-right arrow, which would
+           only say "sideways". -->
+      <symbol id="i-mirror" viewBox="0 0 16 14">
+        <path d="M8 1.5v11" />
+        <path d="M5 4.5 2.5 7 5 9.5" />
+        <path d="M11 4.5 13.5 7 11 9.5" />
+      </symbol>
       <symbol id="i-close" viewBox="0 0 12 12">
         <path d="M2 2 10 10M10 2 2 10" />
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 12 12">
+        <path d="M2 6.4 4.8 9.2 10 3.4" />
       </symbol>
       <!-- A panel with its right column filled: what the button does, rather
            than a globe, which would only say "web". -->
@@ -35,11 +63,6 @@
         <rect x="2" y="4" width="6" height="6" rx="1" />
         <path d="M4.5 4V2.5h5.5V8H8.5" />
       </symbol>
-      <!-- Three quarters of a circle. Spinning it says "working"; standing
-           still it says "open, but nothing is happening". -->
-      <symbol id="i-spin" viewBox="0 0 16 16">
-        <path d="M8 1.8a6.2 6.2 0 1 1-6.2 6.2" />
-      </symbol>
     </svg>
 
     <div class="app">
@@ -48,10 +71,10 @@
            active terminal's name. -->
       <header class="titlebar" id="titlebar">
         <div class="tb-rail">
-          <span class="tb-brand" data-drag>mux</span>
-          <button class="icon-btn" id="new-btn" title="New terminal">
-            <svg class="ico"><use href="#i-plus" /></svg>
-          </button>
+          <span class="tb-brand" data-drag>
+            <svg class="tb-mark" aria-hidden="true"><use href="#i-mark" /></svg>
+            <span data-drag>mux</span>
+          </span>
         </div>
 
         <!-- Deliberately empty on the left. The rail already names every
@@ -63,30 +86,46 @@
           <!-- Shown only when a newer release exists. -->
           <button class="chip" id="update-chip" hidden></button>
 
+          <button class="icon-btn" id="settings-btn" title="Settings">
+            <svg class="ico"><use href="#i-gear" /></svg>
+          </button>
+
           <button class="icon-btn" id="browser-btn" title="Browser sidebar">
             <svg class="ico"><use href="#i-panel" /></svg>
           </button>
+        </div>
 
-          <div class="win-controls">
-            <button class="win-btn" id="win-min" title="Minimise">
-              <svg class="ico"><use href="#i-min" /></svg>
-            </button>
-            <button class="win-btn" id="win-max" title="Maximise">
-              <svg class="ico"><use id="win-max-icon" href="#i-max" /></svg>
-            </button>
-            <button class="win-btn danger" id="win-close" title="Close">
-              <svg class="ico"><use href="#i-close" /></svg>
-            </button>
-          </div>
+        <!-- Outside both sections on purpose. Swapping sides moves the rail's
+             header across the window; the minimise, maximise and close buttons
+             are the operating system's convention and stay in the corner they
+             belong in whichever way round everything else is. -->
+        <div class="win-controls">
+          <button class="win-btn" id="win-min" title="Minimise">
+            <svg class="ico"><use href="#i-min" /></svg>
+          </button>
+          <button class="win-btn" id="win-max" title="Maximise">
+            <svg class="ico"><use id="win-max-icon" href="#i-max" /></svg>
+          </button>
+          <button class="win-btn danger" id="win-close" title="Close">
+            <svg class="ico"><use href="#i-close" /></svg>
+          </button>
         </div>
       </header>
 
       <!-- Left: the terminal rail -->
       <aside class="rail">
-        <label class="rail-search">
-          <svg class="ico"><use href="#i-search" /></svg>
+        <!-- Search and new-terminal, together. Both are things you do TO the
+             list, so they belong at the top of it rather than in the window's
+             title bar. The search is a button until you want it. -->
+        <div class="rail-head" id="rail-head">
+          <button class="icon-btn rail-search-btn" id="filter-btn" title="Search terminals">
+            <svg class="ico"><use href="#i-search" /></svg>
+          </button>
           <input id="filter" placeholder="Search" spellcheck="false" />
-        </label>
+          <button class="icon-btn" id="new-btn" title="New terminal">
+            <svg class="ico"><use href="#i-plus" /></svg>
+          </button>
+        </div>
 
         <div class="rail-list" id="list"></div>
       </aside>
@@ -104,6 +143,15 @@
 
       <!-- Right: a real browser webview lives on top of #browser-slot -->
       <section class="browser-panel chrome-hidden" id="browser-panel">
+        <!-- The open pages. Above the address bar, because the bar describes
+             whichever of these is selected. -->
+        <div class="tabstrip" id="tabstrip">
+          <div class="tabs" id="tabs"></div>
+          <button class="icon-btn tab-new" id="tab-new" title="New tab">
+            <svg class="ico"><use href="#i-plus" /></svg>
+          </button>
+        </div>
+
         <!-- Collapsed to a hover strip by default; see .chrome-hidden. -->
         <header class="browser-bar" id="browser-bar"
                 title="Address bar — Ctrl+Shift+L">
@@ -112,6 +160,17 @@
           <button class="icon-btn" id="reload-btn" title="Reload">⟳</button>
           <input id="url" class="url-input" spellcheck="false"
                  placeholder="Search or enter address" />
+          <!-- Closing the panel belongs on the panel. The title bar's toggle
+               opens it and then hides itself, because a control that opened a
+               thing is not where anyone looks to shut it. -->
+          <button class="icon-btn" id="browser-close" title="Close browser">
+            <svg class="ico"><use href="#i-close" /></svg>
+          </button>
+          <!-- Overlaid on the bar rather than placed under it. A strip that
+               took up its own height would move the slot below, and the native
+               browser is positioned over that slot's rectangle - so every page
+               that started loading would resize the page that was loading. -->
+          <div class="browser-progress" id="browser-progress" hidden></div>
         </header>
         <!-- Deliberately empty: the native browser webview is positioned over
              this element's rectangle. Nothing drawn here would be visible. -->
@@ -123,6 +182,7 @@
          pointer, so it lives at the top level rather than inside a row that
          gets thrown away on the next repaint. -->
     <div class="menu context" id="row-menu" hidden></div>
+    <div class="menu settings" id="settings-menu" hidden></div>
 
     <!-- Failures used to be invisible: a terminal would exist but never show
          up, with the reason only in a console nobody can open. -->
@@ -136,6 +196,7 @@
     <script src="vendor/xterm.js"></script>
     <script src="vendor/addon-fit.js"></script>
     <script src="vendor/addon-web-links.js"></script>
+    <script src="vendor/addon-serialize.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
