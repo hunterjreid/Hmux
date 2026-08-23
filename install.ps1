@@ -1,8 +1,8 @@
-# mux installer.
+# hmux installer.
 #
-#   irm https://raw.githubusercontent.com/hunterjreid/mux/master/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/hunterjreid/hmux/master/install.ps1 | iex
 #
-# Fetches the latest release, drops the two binaries in %LOCALAPPDATA%\mux,
+# Fetches the latest release, drops the two binaries in %LOCALAPPDATA%\hmux,
 # puts that directory on PATH and adds a Start menu entry. Run it again later
 # and it updates in place.
 #
@@ -15,7 +15,7 @@
 
 param(
     # Install what is in target\release rather than the latest release. This is
-    # the loop for working on mux itself: `cargo build --release --workspace`,
+    # the loop for working on hmux itself: `cargo build --release --workspace`,
     # then this, and the copy you actually run is the one you just built.
     [switch] $FromBuild
 )
@@ -25,13 +25,13 @@ $ErrorActionPreference = 'Stop'
 # PowerShell 5.1 still negotiates TLS 1.0 by default, which github.com refuses.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$Repo       = 'hunterjreid/mux'
-$InstallDir = Join-Path $env:LOCALAPPDATA 'mux'
-# mux-daemon is not optional. It owns the terminals; the two front ends are
+$Repo       = 'hunterjreid/hmux'
+$InstallDir = Join-Path $env:LOCALAPPDATA 'hmux'
+# hmux-daemon is not optional. It owns the terminals; the two front ends are
 # views onto it. An install without it is a window that cannot open a shell,
 # and it fails at the point you click New rather than at startup, so it does
 # not look like a missing file - it looks like the app is broken.
-$Binaries   = @('mux-gui.exe', 'mux.exe', 'mux-daemon.exe')
+$Binaries   = @('hmux-gui.exe', 'hmux.exe', 'hmux-daemon.exe')
 
 function Write-Step($text) { Write-Host "  $text" }
 function Fail($text) {
@@ -42,7 +42,7 @@ function Fail($text) {
 }
 
 Write-Host ''
-Write-Host '  mux' -ForegroundColor Cyan
+Write-Host '  hmux' -ForegroundColor Cyan
 Write-Host '  terminals that keep running whether or not you are looking at them' -ForegroundColor DarkGray
 Write-Host ''
 
@@ -52,7 +52,7 @@ Write-Host ''
 # put a shell in, so there is no point installing anything.
 $build = [Environment]::OSVersion.Version.Build
 if ($build -lt 17763) {
-    Fail "mux needs Windows 10 1809 or newer, and this is build $build."
+    Fail "hmux needs Windows 10 1809 or newer, and this is build $build."
 }
 
 # Overwriting a running executable fails part way through and leaves a file
@@ -66,9 +66,9 @@ if ($build -lt 17763) {
 # file. The new binary takes its place and is what starts next time — which is
 # whenever the old one exits, having been idle for two minutes with nothing
 # left to hold.
-$running = Get-Process -Name 'mux-gui', 'mux' -ErrorAction SilentlyContinue
+$running = Get-Process -Name 'hmux-gui', 'hmux' -ErrorAction SilentlyContinue
 if ($running) {
-    Fail 'mux is already running. Close it, then run this again.'
+    Fail 'hmux is already running. Close it, then run this again.'
 }
 
 # Sweep up anything moved aside by a previous run. These are only removable
@@ -77,9 +77,9 @@ if ($running) {
 Get-ChildItem -Path $InstallDir -Filter '*.old' -ErrorAction SilentlyContinue |
     ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
 
-$daemonRunning = [bool] (Get-Process -Name 'mux-daemon' -ErrorAction SilentlyContinue)
+$daemonRunning = [bool] (Get-Process -Name 'hmux-daemon' -ErrorAction SilentlyContinue)
 if ($daemonRunning) {
-    $live = Join-Path $InstallDir 'mux-daemon.exe'
+    $live = Join-Path $InstallDir 'hmux-daemon.exe'
     if (Test-Path $live) {
         # A unique name every time, rather than a fixed `.old`.
         #
@@ -139,7 +139,7 @@ if ($FromBuild) {
     try {
         $release = Invoke-RestMethod `
             -Uri "https://api.github.com/repos/$Repo/releases/latest" `
-            -Headers @{ 'User-Agent' = 'mux-install' }
+            -Headers @{ 'User-Agent' = 'hmux-install' }
     } catch {
         Fail "could not reach GitHub: $($_.Exception.Message)"
     }
@@ -178,7 +178,7 @@ if ($entries -notcontains $InstallDir) {
     $updated = (@($entries) + $InstallDir) -join ';'
     [Environment]::SetEnvironmentVariable('Path', $updated, 'User')
 }
-# So `mux` works in this session too, not just the next one.
+# So `hmux` works in this session too, not just the next one.
 if (($env:Path -split ';') -notcontains $InstallDir) {
     $env:Path = "$env:Path;$InstallDir"
 }
@@ -186,10 +186,10 @@ if (($env:Path -split ';') -notcontains $InstallDir) {
 try {
     $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut(
-        (Join-Path $startMenu 'mux.lnk'))
-    $shortcut.TargetPath = Join-Path $InstallDir 'mux-gui.exe'
+        (Join-Path $startMenu 'hmux.lnk'))
+    $shortcut.TargetPath = Join-Path $InstallDir 'hmux-gui.exe'
     $shortcut.WorkingDirectory = $env:USERPROFILE
-    $shortcut.Description = 'mux — terminals and a browser in one window'
+    $shortcut.Description = 'hmux — terminals and a browser in one window'
     $shortcut.Save()
     Write-Step 'added a Start menu entry'
 } catch {
@@ -202,19 +202,19 @@ try {
 Write-Host ''
 Write-Host "  installed $tag to $InstallDir" -ForegroundColor Green
 Write-Host ''
-Write-Host '    mux-gui     the window: terminals, status lights and a browser'
-Write-Host '    mux         the console version, inside the terminal you are in'
+Write-Host '    hmux-gui     the window: terminals, status lights and a browser'
+Write-Host '    hmux         the console version, inside the terminal you are in'
 Write-Host ''
 
 if (-not $hasWebView) {
     Write-Host '  one more thing' -ForegroundColor Yellow
-    Write-Host '  mux-gui draws with WebView2 and this machine does not have it.'
-    Write-Host '  Install it, then mux-gui will work:'
+    Write-Host '  hmux-gui draws with WebView2 and this machine does not have it.'
+    Write-Host '  Install it, then hmux-gui will work:'
     Write-Host '    https://go.microsoft.com/fwlink/p/?LinkId=2124703' -ForegroundColor Cyan
     Write-Host '  The console version does not need it.'
     Write-Host ''
 }
 
 Write-Host '  Open a new terminal for PATH to take effect, or start it now with:'
-Write-Host "    & '$(Join-Path $InstallDir 'mux-gui.exe')'" -ForegroundColor Cyan
+Write-Host "    & '$(Join-Path $InstallDir 'hmux-gui.exe')'" -ForegroundColor Cyan
 Write-Host ''

@@ -129,7 +129,7 @@ mod tests {
     /// could be mistaken for the user's own data.
     #[test]
     fn text_survives_a_round_trip() {
-        let sample = "mux clipboard test — ünïcödé ✓";
+        let sample = "hmux clipboard test — ünïcödé ✓";
         if write_text(sample).is_err() {
             // A machine with no window station (some CI) has no clipboard at
             // all. That is not this code being wrong.

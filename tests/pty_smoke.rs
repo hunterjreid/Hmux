@@ -8,9 +8,9 @@
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use mux::activity::{Activity, ProcessTable};
-use mux::grid::Color;
-use mux::pane::Pane;
+use hmux::activity::{Activity, ProcessTable};
+use hmux::grid::Color;
+use hmux::pane::Pane;
 
 /// Poll the pane's grid until `needle` shows up, or give up.
 fn wait_for(pane: &Pane, needle: &str, timeout: Duration) -> Option<String> {
@@ -97,9 +97,9 @@ fn the_composed_frame_has_a_rail_a_divider_and_live_output() {
     assert!(wait_for(&a, "42", Duration::from_secs(15)).is_some());
 
     let (cols, rows) = (80u16, 24u16);
-    let l = mux::layout::compute(cols, rows, 20);
+    let l = hmux::layout::compute(cols, rows, 20);
     let panes = vec![a, b];
-    let frame = mux::render::compose(&panes, 0, &l, cols, rows, false);
+    let frame = hmux::render::compose(&panes, 0, &l, cols, rows, false);
 
     let row = |y: u16| -> String {
         (0..cols)
@@ -274,7 +274,7 @@ fn pane_reports_death_after_exit() {
     let mut saw_exit = false;
     while Instant::now() < deadline {
         match rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(mux::Ev::Exited(id)) => {
+            Ok(hmux::Ev::Exited(id)) => {
                 assert_eq!(id, 7);
                 saw_exit = true;
                 break;

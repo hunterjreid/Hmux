@@ -1,6 +1,6 @@
 //! The process that owns the terminals, so closing a window does not end them.
 //!
-//! Everything else in mux is a view. The shells themselves live here, in a
+//! Everything else in hmux is a view. The shells themselves live here, in a
 //! process with no window, and a front end attaches to them the way you attach
 //! to a tmux session: it asks what exists, asks for the backlog, and then gets
 //! the live stream. Close the window and nothing happens to the shells — the
@@ -82,7 +82,7 @@ pub fn log(message: &str) {
     let Ok(appdata) = std::env::var("APPDATA") else {
         return;
     };
-    let dir = std::path::Path::new(&appdata).join("mux");
+    let dir = std::path::Path::new(&appdata).join("hmux");
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
@@ -617,7 +617,7 @@ pub fn run() -> Result<()> {
         if handle == INVALID_HANDLE_VALUE {
             let err = std::io::Error::last_os_error();
             if first {
-                bail!("another mux daemon already owns {name}: {err}");
+                bail!("another hmux daemon already owns {name}: {err}");
             }
             bail!("could not open {name}: {err}");
         }
@@ -773,13 +773,20 @@ fn pump_events(mut out: File, rx: Receiver<Event>) {
 /// server in, and so the name is only written down once.
 pub fn connect() -> Result<File> {
     let name = crate::proto::pipe_name();
+    match open_pipe(&name) {
+        Ok(file) => Ok(file),
+        // Fall back to the name this used before the rename, so a daemon
+        // started by the old build is still reachable and the terminals it is
+        // holding survive the update. See `proto::legacy_pipe_name`.
+        Err(e) => open_pipe(&crate::proto::legacy_pipe_name())
+            .map_err(|_| anyhow!("no daemon on {name}: {e}")),
+    }
+}
+
+fn open_pipe(name: &str) -> std::io::Result<File> {
     // Opened without any overlapped flag, so this side gets the same blocking
     // reads the server uses and the handle behaves as an ordinary file.
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&name)
-        .map_err(|e| anyhow!("no daemon on {name}: {e}"))
+    std::fs::OpenOptions::new().read(true).write(true).open(name)
 }
 
 #[cfg(test)]
@@ -789,7 +796,7 @@ mod tests {
     #[test]
     fn the_pipe_name_is_per_user_and_a_legal_pipe_path() {
         let name = crate::proto::pipe_name();
-        assert!(name.starts_with(r"\\.\pipe\mux-"));
+        assert!(name.starts_with(r"\\.\pipe\hmux-"));
         // A pipe path cannot contain a backslash past the prefix, and a
         // username can.
         assert!(!name[r"\\.\pipe\".len()..].contains('\\'));

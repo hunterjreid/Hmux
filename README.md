@@ -1,4 +1,4 @@
-# mux
+# hmux
 
 Terminals that keep running whether or not you're looking at them, in two front
 ends: a GUI app, and a console-only version.
@@ -6,10 +6,10 @@ ends: a GUI app, and a console-only version.
 ## Install
 
 ```powershell
-irm https://raw.githubusercontent.com/hunterjreid/mux/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/hunterjreid/hmux/master/install.ps1 | iex
 ```
 
-Puts the latest release in `%LOCALAPPDATA%\mux`, adds it to your PATH and makes
+Puts the latest release in `%LOCALAPPDATA%\hmux`, adds it to your PATH and makes
 a Start menu entry. Per-user, so it never asks for administrator rights, and
 uninstalling is deleting that folder.
 
@@ -28,15 +28,15 @@ never interrupts what is running — it is picked up the next time the daemon
 starts on its own.
 
 If you'd rather click something, take an installer from the
-[latest release](https://github.com/hunterjreid/mux/releases/latest).
+[latest release](https://github.com/hunterjreid/hmux/releases/latest).
 
 Neither is code signed yet, so Windows will have something to say the first
-time you run it. `mux-gui` needs the WebView2 runtime, which Windows 11 already
+time you run it. `hmux-gui` needs the WebView2 runtime, which Windows 11 already
 has; the installer checks and tells you where to get it if yours doesn't.
 
 Needs Windows 10 1809 or newer, for ConPTY.
 
-## The GUI — `cargo run --release -p mux-gui`
+## The GUI — `cargo run --release -p hmux-gui`
 
 Terminals down the left, the active one filling the middle, and **that
 terminal's own browser** on the right.
@@ -88,7 +88,7 @@ So a compile that has been silent for a minute still reads as busy, which the
 usual "did it print recently" heuristic gets wrong.
 
 **It comes back the way you left it, still running.** The shells do not belong
-to the window. They belong to `mux-daemon`, a process with no window of its
+to the window. They belong to `hmux-daemon`, a process with no window of its
 own, and closing the window closes a view onto them rather than the things
 themselves. Reopening it attaches to the same terminals, mid-command, with
 everything they printed while nobody was looking already in the scrollback. A
@@ -100,7 +100,7 @@ So there are two paths back, and which one you get is not a preference:
   running, and the window simply sits back down in front of them.
 - **Restore**, when the daemon is not there — the first ever run, or after a
   reboot, which is the one thing no daemon survives. Then the terminals are
-  rebuilt from `%APPDATA%\mux\session.json`: the same shells in the same
+  rebuilt from `%APPDATA%\hmux\session.json`: the same shells in the same
   directories, with the old output replayed above a rule saying where the
   previous session ended. These are new processes, and whatever was running in
   the old ones is gone.
@@ -130,12 +130,12 @@ disagree about what "green" is read as two different machines. The 256-colour
 cube and 24-bit truecolor pass through untouched, so `\x1b[38;2;r;g;b m` is
 exact.
 
-Problems go to `%TEMP%\mux.log` and to a banner in the window. A GUI has nowhere
+Problems go to `%TEMP%\hmux.log` and to a banner in the window. A GUI has nowhere
 to print, and a silent failure is how a bug here stays invisible.
 
 ---
 
-## The console version — `cargo run --release --bin mux`
+## The console version — `cargo run --release --bin hmux`
 
 A rail of buttons down the left, one terminal filling the rest of the screen.
 Click a button, get that terminal.
@@ -149,7 +149,7 @@ Click a button, get that terminal.
 │            │                              │
 │   + new    │                              │
 ├────────────┴──────────────────────────────┤
-│ mux · 3/3 live · pane 1   C-b c new  …    │
+│ hmux · 3/3 live · pane 1   C-b c new  …    │
 └───────────────────────────────────────────┘
 ```
 
@@ -162,9 +162,9 @@ work in pane 1, and switching back shows its current screen, not a blank one.
 
 ```
 cargo build --release
-.\target\release\mux-gui.exe
-.\target\release\mux.exe
-.\target\release\mux.exe --shell powershell.exe
+.\target\release\hmux-gui.exe
+.\target\release\hmux.exe
+.\target\release\hmux.exe --shell powershell.exe
 ```
 
 The console version needs a real console — piping its output somewhere is
@@ -232,7 +232,7 @@ Two things that are easy to get wrong and are handled:
 
 ## What isn't done
 
-- **The console front end is not detachable.** `mux.exe` still owns its own
+- **The console front end is not detachable.** `hmux.exe` still owns its own
   ptys, so quitting it kills its shells. The daemon is only behind the GUI;
   pointing the console version at it is the same client work done twice.
 - **A reboot is still a reboot.** Nothing survives one, and the restore path

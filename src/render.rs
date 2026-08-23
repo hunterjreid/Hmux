@@ -187,7 +187,7 @@ fn draw_status(f: &mut Frame, panes: &[Pane], active: usize, layout: &Layout, pe
     f.fill_row(s.x, s.y, s.w, STATUS_BG);
 
     let live = panes.iter().filter(|p| p.is_alive()).count();
-    let left = format!(" mux · {}/{} live · pane {} ", live, panes.len(), active + 1);
+    let left = format!(" hmux · {}/{} live · pane {} ", live, panes.len(), active + 1);
     let x = f.text(s.x, s.y, s.w, &left, STATUS_FG, STATUS_BG, A_BOLD);
 
     if pending {

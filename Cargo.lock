@@ -1260,6 +1260,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "hmux"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "unicode-width",
+ "vte",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "hmux-gui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hmux",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+]
+
+[[package]]
 name = "html5ever"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1860,31 +1885,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.20",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mux"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "portable-pty",
- "serde",
- "serde_json",
- "unicode-width",
- "vte",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mux-gui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "mux",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
 ]
 
 [[package]]

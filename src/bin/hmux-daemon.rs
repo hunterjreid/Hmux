@@ -9,11 +9,11 @@
 #![windows_subsystem = "windows"]
 
 fn main() {
-    if let Err(e) = mux::daemon::run() {
+    if let Err(e) = hmux::daemon::run() {
         // Only reachable when the pipe itself could not be served, which is
         // almost always a second daemon losing the race for the name. Exiting
         // quietly is correct: the one that won is already doing the job.
-        eprintln!("mux-daemon: {e:#}");
+        eprintln!("hmux-daemon: {e:#}");
         std::process::exit(1);
     }
 }

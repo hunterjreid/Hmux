@@ -1,4 +1,4 @@
-//! The *host* terminal — the real console that mux draws itself on.
+//! The *host* terminal — the real console that hmux draws itself on.
 //!
 //! This is the Windows-specific edge of the program. We need three things from
 //! the console host:
@@ -102,7 +102,7 @@ impl HostTerm {
                 || GetConsoleMode(stdout, &mut orig_out_mode) == 0
             {
                 return Err(io::Error::other(
-                    "stdin/stdout is not a console — run mux from a real terminal",
+                    "stdin/stdout is not a console — run hmux from a real terminal",
                 ));
             }
         }

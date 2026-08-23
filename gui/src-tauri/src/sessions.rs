@@ -1,7 +1,7 @@
 //! The set of live terminals — none of which live here.
 //!
 //! This used to own the pseudoconsoles. It does not any more: they belong to
-//! `mux-daemon`, a process with no window, and this is the half that talks to
+//! `hmux-daemon`, a process with no window, and this is the half that talks to
 //! it. The reason is the one thing a window cannot do, which is outlive itself.
 //! A terminal owned by the GUI ends when the GUI ends, so every restart began
 //! with fresh shells and a picture of the old ones. Owned by the daemon, the
@@ -13,7 +13,7 @@
 //! where the bytes come from.
 //!
 //! Two connections, because a named pipe cannot be read and written at the same
-//! time; see [`mux::proto::Role`].
+//! time; see [`hmux::proto::Role`].
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -27,7 +27,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use mux::proto::{Event, Request, Role, SessionInfo};
+use hmux::proto::{Event, Request, Role, SessionInfo};
 
 pub type SessionId = u32;
 
@@ -123,7 +123,7 @@ impl Sessions {
     fn client(&self) -> Result<&Client> {
         self.client
             .as_ref()
-            .ok_or_else(|| anyhow!("not connected to the mux daemon"))
+            .ok_or_else(|| anyhow!("not connected to the hmux daemon"))
     }
 
     fn ask(&self, req: Request) -> Result<()> {
@@ -278,7 +278,7 @@ impl Sessions {
 fn connect_with_retry(patience: Duration) -> Result<File> {
     let deadline = std::time::Instant::now() + patience;
     loop {
-        match mux::daemon::connect() {
+        match hmux::daemon::connect() {
             Ok(file) => return Ok(file),
             Err(e) if std::time::Instant::now() >= deadline => return Err(e),
             Err(_) => std::thread::sleep(Duration::from_millis(25)),
@@ -334,7 +334,7 @@ fn start_daemon() -> Result<()> {
         .context("could not find our own path")?
         .parent()
         .ok_or_else(|| anyhow!("no directory to look in"))?
-        .join("mux-daemon.exe");
+        .join("hmux-daemon.exe");
 
     if !exe.exists() {
         bail!("{} is missing", exe.display());
@@ -407,7 +407,7 @@ fn spawn_event_reader(events: File, shared: Arc<Shared>, app: AppHandle) {
             // terminals that quietly stopped being connected to anything.
             let _ = app.emit(
                 "daemon-error",
-                "lost the connection to the mux daemon".to_string(),
+                "lost the connection to the hmux daemon".to_string(),
             );
         })
         .expect("failed to start the daemon event reader");

@@ -1,8 +1,8 @@
 [package]
-name = "mux-gui"
+name = "hmux-gui"
 version = "0.1.0"
 edition = "2021"
-description = "mux — terminals and a browser in one window"
+description = "hmux — terminals and a browser in one window"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -16,7 +16,7 @@ serde_json = "1"
 anyhow = "1"
 
 # The terminal half: ConPTY handling, shared with the console front end.
-mux = { path = "../.." }
+hmux = { path = "../.." }
 
 [features]
 default = ["custom-protocol"]

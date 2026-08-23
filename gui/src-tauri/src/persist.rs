@@ -1,4 +1,4 @@
-//! What mux remembers between runs.
+//! What hmux remembers between runs.
 //!
 //! The shells themselves do not survive quitting — panes outlive *switching*,
 //! not the process exiting, and real detach needs a daemon that owns the ptys.
@@ -11,7 +11,7 @@
 //! The text is the terminal's own buffer, serialized by the UI — the screen as
 //! it was drawn, not the pty stream that drew it. See `save_layout`.
 //!
-//! Written to `%APPDATA%\mux\session.json`.
+//! Written to `%APPDATA%\hmux\session.json`.
 
 use std::path::{Path, PathBuf};
 
@@ -66,11 +66,47 @@ pub struct Layout {
     pub terminals: Vec<SavedTerminal>,
 }
 
-fn directory() -> PathBuf {
+fn appdata() -> PathBuf {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        .join("mux")
+}
+
+fn directory() -> PathBuf {
+    appdata().join("hmux")
+}
+
+/// Carry the old directory over the first time this build runs.
+///
+/// The project used to be called `mux` and kept all of this in a folder of
+/// that name. Renaming the folder along with the program would have silently
+/// dropped every terminal name, every open page and the chosen background —
+/// they would still be on disk, in a directory nothing looks in any more,
+/// which is the worst version of losing something.
+///
+/// Copied rather than moved, so an older build run afterwards still finds its
+/// own files. Only ever runs once: the presence of the new directory is what
+/// says the migration has happened, so nothing here overwrites newer state.
+pub fn migrate_from_mux() {
+    let new = directory();
+    if new.exists() {
+        return;
+    }
+    let old = appdata().join("mux");
+    if !old.is_dir() {
+        return;
+    }
+    if std::fs::create_dir_all(&new).is_err() {
+        return;
+    }
+    // By name, not wholesale: the old directory also holds daemon.log, which
+    // is a log and belongs to a process that is still writing to it.
+    for name in ["session.json", "background.txt"] {
+        let from = old.join(name);
+        if from.is_file() {
+            let _ = std::fs::copy(&from, new.join(name));
+        }
+    }
 }
 
 pub fn path() -> PathBuf {

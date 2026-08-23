@@ -1,5 +1,5 @@
 [package]
-name = "mux"
+name = "hmux"
 version = "0.1.0"
 edition = "2024"
 
@@ -8,13 +8,13 @@ edition = "2024"
 members = ["gui/src-tauri"]
 
 [[bin]]
-name = "mux"
+name = "hmux"
 path = "src/main.rs"
 
 # The process that outlives the window. See src/daemon.rs.
 [[bin]]
-name = "mux-daemon"
-path = "src/bin/mux-daemon.rs"
+name = "hmux-daemon"
+path = "src/bin/hmux-daemon.rs"
 
 [dependencies]
 anyhow = "1.0.104"

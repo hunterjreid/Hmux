@@ -1,4 +1,4 @@
-//! mux — a terminal multiplexer for Windows.
+//! hmux — a terminal multiplexer for Windows.
 //!
 //! Layers, bottom up:
 //!   [`term`]   — the host console: raw mode, VT in/out, alternate screen

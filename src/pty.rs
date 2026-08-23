@@ -24,7 +24,7 @@ pub struct PtyProcess {
 }
 
 impl PtyProcess {
-    /// Start `program` under a new pseudoconsole, in whatever directory mux
+    /// Start `program` under a new pseudoconsole, in whatever directory hmux
     /// itself is running from. Returns the handle plus the read side, which the
     /// caller is expected to drain on its own thread.
     pub fn spawn(program: &str, cols: u16, rows: u16) -> Result<(Self, Box<dyn Read + Send>)> {
@@ -77,9 +77,9 @@ impl PtyProcess {
         // the terminal was never the problem.
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
-        cmd.env("TERM_PROGRAM", "mux");
+        cmd.env("TERM_PROGRAM", "hmux");
 
-        // Whatever launched mux may have had colour switched off for its own
+        // Whatever launched hmux may have had colour switched off for its own
         // output — build scripts, CI wrappers and agent harnesses all do this.
         // Inheriting that would silently strip colour from every shell inside a
         // terminal that has just declared itself truecolor, and the symptom

@@ -1,4 +1,4 @@
-// mux — UI logic.
+// hmux — UI logic.
 //
 // Four responsibilities:
 //   1. keep one xterm.js instance per terminal, alive across view switches
@@ -52,7 +52,7 @@ const els = {
  * than about what was running: a size chosen here should survive a machine
  * restart that the shells themselves do not.
  */
-const FONT_SIZES_KEY = "mux.fontSizes";
+const FONT_SIZES_KEY = "hmux.fontSizes";
 const DEFAULT_FONT_SIZE = 13;
 
 function loadFontSizes() {
@@ -243,7 +243,7 @@ function renderTabs() {
     el.onclick = () => selectTab(entry, tab.id);
 
     // The site's mark, taken from the site itself rather than through a
-    // favicon service: mux would otherwise tell a third party every address
+    // favicon service: hmux would otherwise tell a third party every address
     // you open, which is not a reasonable price for a 13px picture.
     const icon = document.createElement("img");
     icon.className = "tab-icon";
@@ -321,7 +321,7 @@ function tabTitle(tab) {
  * window, not about what was running in it — a preference that should hold
  * even for a session started from nothing.
  */
-const MIRROR_KEY = "mux.mirrored";
+const MIRROR_KEY = "hmux.mirrored";
 // Not reflected by default: the rail on the left, the page on the right, which
 // is the layout the README describes and the one every screenshot of this app
 // shows. It defaulted the other way round for a while, so a fresh install
@@ -353,13 +353,13 @@ function applyLoading() {
  * already pinned to the right edge of the window has nowhere to fly to.
  * Replacing the contents in place keeps it in the corner it opened in.
  *
- * There is no account row of the usual kind because there is no account. mux
+ * There is no account row of the usual kind because there is no account. hmux
  * keeps nothing on a server and has nothing to sign in to, so the foot of the
  * menu names the Windows user — the only identity involved — and there is no
  * "log out", which would be an offer to leave somewhere you have never been.
  */
-const HELP_PAGE = "https://github.com/hunterjreid/mux#readme";
-const FEEDBACK_PAGE = "https://github.com/hunterjreid/mux/issues/new";
+const HELP_PAGE = "https://github.com/hunterjreid/hmux#readme";
+const FEEDBACK_PAGE = "https://github.com/hunterjreid/hmux/issues/new";
 
 /** Hand a link to the machine's browser rather than to the panel. */
 function openExternal(url) {
@@ -442,9 +442,9 @@ function openSettings(pane = "root") {
 
     heading("Terminal background");
     option("None", !background, () => setBackground(""));
-    for (const { label, file, tile } of SHIPPED_BACKGROUNDS) {
+    for (const { label, file, tile, dim } of SHIPPED_BACKGROUNDS) {
       option(label, backgroundSource === file, () =>
-        useShippedBackground(file, !!tile)
+        useShippedBackground(file, !!tile, dim)
       );
     }
     // Anything set that did not come from the list above came from a file.
@@ -461,7 +461,7 @@ function openSettings(pane = "root") {
     item("#i-gear", "Settings", () => openSettings("settings"), {
       keepOpen: true,
     });
-    item("#i-info", "About mux", showAbout);
+    item("#i-info", "About hmux", showAbout);
     // These leave the app, unlike a link clicked in a terminal.
     //
     // The panel exists so that what you follow from a shell stays beside that
@@ -484,7 +484,7 @@ function openSettings(pane = "root") {
     separator();
 
     // Not a button. There is nothing to do to it — it is here to say whose
-    // machine this is, which is the whole of what mux knows about you.
+    // machine this is, which is the whole of what hmux knows about you.
     const who = document.createElement("div");
     who.className = "menu-account";
     const avatar = document.createElement("span");
@@ -529,11 +529,11 @@ let background = "";
  * In local storage rather than beside the image, since it is a fact about this
  * window's menu and not about the picture.
  */
-const BG_SOURCE_KEY = "mux.bgSource";
+const BG_SOURCE_KEY = "hmux.bgSource";
 let backgroundSource = localStorage.getItem(BG_SOURCE_KEY) || "";
 
 /** Whether the current background repeats rather than covering. */
-const BG_TILE_KEY = "mux.bgTile";
+const BG_TILE_KEY = "hmux.bgTile";
 let backgroundTiles = localStorage.getItem(BG_TILE_KEY) === "1";
 
 /**
@@ -545,17 +545,28 @@ let backgroundTiles = localStorage.getItem(BG_TILE_KEY) === "1";
  * terminal blows the dots up into visible blobs and throws away the thing that
  * made it a dither.
  */
+/**
+ * Each carries the strength it wants.
+ *
+ * One number cannot serve all of them. The scrim dims toward the terminal's
+ * own near-black, so what survives it depends entirely on how bright the
+ * picture started: at the value that leaves `Daybreak` — a pale blue daylight
+ * scene — as a faint haze, `Ridges` is gone completely, and at the value that
+ * makes `Ridges` visible, `Daybreak` is a photograph you are trying to read
+ * code off. Picking one sets the strength to suit it, and the strength setting
+ * still overrides afterwards for anyone who disagrees.
+ */
 const SHIPPED_BACKGROUNDS = [
-  // Dark first. Every one of these sits under a terminal, and the dark ones
-  // are the ones that work at any strength — a pale image only stays out of
-  // the way at the very top of the dim range.
-  { label: "Harbour", file: "backgrounds/harbour.jpg" },
-  { label: "Coast", file: "backgrounds/coast.jpg" },
-  { label: "Ridges", file: "backgrounds/ridges.jpg" },
-  { label: "Auckland", file: "backgrounds/auckland.webp" },
-  { label: "Daybreak", file: "backgrounds/daybreak.jpg" },
-  { label: "Diffusion", file: "backgrounds/dither.svg", tile: true },
+  { label: "Daybreak", file: "backgrounds/daybreak.jpg", dim: 0.94 },
+  { label: "Harbour", file: "backgrounds/harbour.jpg", dim: 0.88 },
+  { label: "Coast", file: "backgrounds/coast.jpg", dim: 0.88 },
+  { label: "Auckland", file: "backgrounds/auckland.webp", dim: 0.86 },
+  { label: "Ridges", file: "backgrounds/ridges.jpg", dim: 0.78 },
+  { label: "Diffusion", file: "backgrounds/dither.svg", tile: true, dim: 0.8 },
 ];
+
+/** What a window with no opinion yet comes up with. */
+const DEFAULT_BACKGROUND = SHIPPED_BACKGROUNDS[0];
 
 /**
  * How far the scrim goes, as choices rather than a number.
@@ -576,7 +587,7 @@ const BG_STRENGTHS = [
   { label: "Medium", dim: 0.65 },
   { label: "Strong", dim: 0.4 },
 ];
-const BG_DIM_KEY = "mux.bgDim";
+const BG_DIM_KEY = "hmux.bgDim";
 let backgroundDim = Number(localStorage.getItem(BG_DIM_KEY)) || 0.82;
 
 /**
@@ -616,11 +627,29 @@ function applyBackground() {
   }
 }
 
+/**
+ * A window that has never been told otherwise comes up with a background.
+ *
+ * `hmux.bgChosen` is what separates "never picked one" from "picked None". Both
+ * leave nothing on disk, and without the flag turning the background off would
+ * last until the next launch and then quietly undo itself.
+ */
+const BG_CHOSEN_KEY = "hmux.bgChosen";
+
 async function loadBackground() {
   try {
     background = (await invoke("get_background")) || "";
   } catch {
     background = "";
+  }
+
+  if (!background && !localStorage.getItem(BG_CHOSEN_KEY)) {
+    await useShippedBackground(
+      DEFAULT_BACKGROUND.file,
+      !!DEFAULT_BACKGROUND.tile,
+      DEFAULT_BACKGROUND.dim
+    );
+    return;
   }
   applyBackground();
 }
@@ -640,6 +669,9 @@ async function setBackground(data, source = "", tiles = false) {
   try {
     localStorage.setItem(BG_SOURCE_KEY, backgroundSource);
     localStorage.setItem(BG_TILE_KEY, backgroundTiles ? "1" : "0");
+    // Any choice at all, including turning it off, is a choice — see
+    // `BG_CHOSEN_KEY`.
+    localStorage.setItem(BG_CHOSEN_KEY, "1");
   } catch {}
   applyBackground();
   try {
@@ -650,7 +682,7 @@ async function setBackground(data, source = "", tiles = false) {
 }
 
 /** Turn one of the shipped images into a data URL, so both kinds are alike. */
-async function useShippedBackground(file, tiles) {
+async function useShippedBackground(file, tiles, dim) {
   try {
     const response = await fetch(file);
     if (!response.ok) throw new Error(`${file}: HTTP ${response.status}`);
@@ -661,6 +693,11 @@ async function useShippedBackground(file, tiles) {
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
+    // The image's own strength, unless the strength has been set by hand
+    // since — an explicit choice outlives switching pictures.
+    if (dim !== undefined && !localStorage.getItem(BG_DIM_KEY)) {
+      backgroundDim = dim;
+    }
     await setBackground(data, file, tiles);
   } catch (e) {
     showError("background", e);
@@ -719,7 +756,7 @@ async function showAbout() {
     version = await invoke("app_version");
   } catch {}
   showError(
-    "mux",
+    "hmux",
     `v${version} — terminals that keep running whether or not you are looking at them`
   );
 }
@@ -1811,7 +1848,7 @@ function closeRowMenu() {
  * alternative — dropping every pin whenever the daemon restarts — costs them
  * all every time. The cheaper mistake wins.
  */
-const PINNED_KEY = "mux.pinned";
+const PINNED_KEY = "hmux.pinned";
 const pinned = new Set(
   (() => {
     try {
@@ -2022,7 +2059,7 @@ function renderButtons() {
   // already does, and twice was once too many. The window title still does,
   // because that is what the taskbar reads.
   const active = infos.find((i) => i.id === activeId);
-  document.title = active ? `${displayName(active)} — mux` : "mux";
+  document.title = active ? `${displayName(active)} — hmux` : "hmux";
 }
 
 async function refresh() {
@@ -2299,7 +2336,7 @@ function saveLayout() {
  * Sit back down in front of terminals that never stopped running.
  *
  * The warm path, and the ordinary one. The shells belong to the daemon, not to
- * this window, so most of the time closing and reopening mux does not restore
+ * this window, so most of the time closing and reopening hmux does not restore
  * anything: the terminals are still there, mid-command, and all that is needed
  * is a view onto each. `makeTerminal` attaches and writes back everything that
  * happened while nobody was looking.
@@ -2456,8 +2493,8 @@ async function restoreOrStart() {
 // one GET.
 
 const RELEASES_API =
-  "https://api.github.com/repos/hunterjreid/mux/releases/latest";
-const RELEASES_PAGE = "https://github.com/hunterjreid/mux/releases/latest";
+  "https://api.github.com/repos/hunterjreid/hmux/releases/latest";
+const RELEASES_PAGE = "https://github.com/hunterjreid/hmux/releases/latest";
 const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
 
 /** Is `candidate` a later version than `current`? Dotted numbers, `v` optional. */
@@ -2481,7 +2518,7 @@ function isNewer(candidate, current) {
 /// as well as in Rust because this half has to know what to ask GitHub for; the
 /// other half refuses anything not on its own list, and that is the one that
 /// matters.
-const UPDATE_BINARIES = ["mux-gui.exe", "mux.exe", "mux-daemon.exe"];
+const UPDATE_BINARIES = ["hmux-gui.exe", "hmux.exe", "hmux-daemon.exe"];
 
 /// Set once an update has been downloaded and is waiting to be applied, so the
 /// six-hourly check does not start fetching the same release again behind a
@@ -2643,7 +2680,7 @@ function showUpdateModal({ tag, current, phase, percent }) {
     <div class="update-card">
       <h2>Update available</h2>
       <p>
-        This is mux ${current}, and ${tag} is out. Updating keeps this window
+        This is hmux ${current}, and ${tag} is out. Updating keeps this window
         current — your terminals keep running the whole time.
       </p>
       ${body}
@@ -2684,7 +2721,7 @@ function hideUpdateModal() {
  */
 function restorePanelWidths() {
   for (const name of ["--rail-w", "--browser-w"]) {
-    const saved = Number(localStorage.getItem(`mux${name}`));
+    const saved = Number(localStorage.getItem(`hmux${name}`));
     if (saved > 0) {
       document.documentElement.style.setProperty(name, `${saved}px`);
     }
@@ -2715,7 +2752,7 @@ function fitPanelsToWindow() {
       root.style.setProperty(name, `${ceiling}px`);
       // Written back, or the next launch restores the size that did not fit.
       try {
-        localStorage.setItem(`mux${name}`, String(ceiling));
+        localStorage.setItem(`hmux${name}`, String(ceiling));
       } catch {}
     }
   }
@@ -2750,7 +2787,7 @@ function makeSplitter(el, varName, opts) {
     const clamped = Math.max(opts.min, Math.min(opts.max, w));
     document.documentElement.style.setProperty(varName, `${clamped}px`);
     try {
-      localStorage.setItem(`mux${varName}`, String(clamped));
+      localStorage.setItem(`hmux${varName}`, String(clamped));
     } catch {}
     // Deliberately not refitting the terminal here, and deliberately not
     // moving the browser either.
@@ -3056,7 +3093,7 @@ async function main() {
   // The same gesture over the rail, sizing the rail instead. Captured for the
   // same reason: the list scrolls, so it would otherwise swallow the event
   // everywhere except at the ends.
-  const RAIL_FONT_KEY = "mux.railFont";
+  const RAIL_FONT_KEY = "hmux.railFont";
   let railFont = Number(localStorage.getItem(RAIL_FONT_KEY)) || 13;
   const applyRailFont = () =>
     document.documentElement.style.setProperty("--rail-font", `${railFont}px`);
@@ -3157,7 +3194,7 @@ async function main() {
 
 main().catch((e) => {
   document.body.innerHTML =
-    `<pre class="term-empty">mux failed to start:\n${e}</pre>`;
+    `<pre class="term-empty">hmux failed to start:\n${e}</pre>`;
   console.error(e);
   invoke("ui_log", { message: `failed to start: ${e}` }).catch(() => {});
 });

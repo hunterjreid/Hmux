@@ -8,10 +8,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use mux::input::{Action, Router};
-use mux::pane::Pane;
-use mux::render::Renderer;
-use mux::{layout, render, term, Ev};
+use hmux::input::{Action, Router};
+use hmux::pane::Pane;
+use hmux::render::Renderer;
+use hmux::{layout, render, term, Ev};
 
 /// What the panes are. `cmd.exe` because that's the shell being multiplexed;
 /// `--shell` overrides it.
@@ -34,7 +34,7 @@ fn main() {
     if let Err(e) = run(&shell) {
         // The HostTerm guard has been dropped by now, so the console is back to
         // normal and this is readable.
-        eprintln!("mux: {e:#}");
+        eprintln!("hmux: {e:#}");
         std::process::exit(1);
     }
 }
@@ -50,8 +50,8 @@ fn parse_args() -> String {
             }
             "-h" | "--help" => {
                 println!(
-                    "mux — terminal multiplexer\n\n\
-                     usage: mux [--shell <program>]\n\n\
+                    "hmux — terminal multiplexer\n\n\
+                     usage: hmux [--shell <program>]\n\n\
                      keys:\n  \
                        C-b c    new terminal\n  \
                        C-b n/p  next / previous\n  \
@@ -196,7 +196,7 @@ fn run(shell: &str) -> Result<()> {
     }
 
     let (cols, rows) = term::size();
-    let mut mux = Mux {
+    let mut hmux = Mux {
         panes: Vec::new(),
         active: 0,
         sidebar_w: DEFAULT_SIDEBAR_W,
@@ -206,7 +206,7 @@ fn run(shell: &str) -> Result<()> {
         next_id: 1,
         events: tx,
     };
-    mux.spawn_pane()?;
+    hmux.spawn_pane()?;
 
     let mut router = Router::new();
     let mut renderer = Renderer::new();
@@ -221,7 +221,7 @@ fn run(shell: &str) -> Result<()> {
                 if matches!(ev, Ev::Input(_)) {
                     last_input = Instant::now();
                 }
-                if handle(&mut mux, &mut router, &mut renderer, ev)? {
+                if handle(&mut hmux, &mut router, &mut renderer, ev)? {
                     break 'outer;
                 }
                 dirty = true;
@@ -231,7 +231,7 @@ fn run(shell: &str) -> Result<()> {
                     if matches!(ev, Ev::Input(_)) {
                         last_input = Instant::now();
                     }
-                    if handle(&mut mux, &mut router, &mut renderer, ev)? {
+                    if handle(&mut hmux, &mut router, &mut renderer, ev)? {
                         break 'outer;
                     }
                 }
@@ -244,7 +244,7 @@ fn run(shell: &str) -> Result<()> {
         // keypress — release it so Escape isn't swallowed.
         if router.has_pending() && last_input.elapsed() >= ESC_FLUSH {
             if let Some(Action::Forward(b)) = router.flush_pending() {
-                if let Some(p) = mux.panes.get(mux.active) {
+                if let Some(p) = hmux.panes.get(hmux.active) {
                     p.write_input(&b);
                 }
             }
@@ -253,25 +253,25 @@ fn run(shell: &str) -> Result<()> {
         if last_resize_check.elapsed() >= RESIZE_POLL {
             last_resize_check = Instant::now();
             let (c, r) = term::size();
-            if (c, r) != (mux.cols, mux.rows) {
-                mux.resize_all(c, r);
+            if (c, r) != (hmux.cols, hmux.rows) {
+                hmux.resize_all(c, r);
                 renderer.invalidate();
                 dirty = true;
             }
         }
 
-        if mux.panes.is_empty() {
+        if hmux.panes.is_empty() {
             break;
         }
 
         if dirty && last_frame.elapsed() >= FRAME {
-            let l = mux.layout();
+            let l = hmux.layout();
             let frame = render::compose(
-                &mux.panes,
-                mux.active,
+                &hmux.panes,
+                hmux.active,
                 &l,
-                mux.cols,
-                mux.rows,
+                hmux.cols,
+                hmux.rows,
                 router.prefix_armed(),
             );
             renderer.draw(&frame)?;
@@ -285,7 +285,7 @@ fn run(shell: &str) -> Result<()> {
 }
 
 /// Returns `Ok(true)` when the user asked to quit.
-fn handle(mux: &mut Mux, router: &mut Router, renderer: &mut Renderer, ev: Ev) -> Result<bool> {
+fn handle(hmux: &mut Mux, router: &mut Router, renderer: &mut Renderer, ev: Ev) -> Result<bool> {
     match ev {
         Ev::Output => {}
         Ev::Exited(id) => {
@@ -298,31 +298,31 @@ fn handle(mux: &mut Mux, router: &mut Router, renderer: &mut Renderer, ev: Ev) -
             for action in router.feed(&bytes) {
                 match action {
                     Action::Forward(b) => {
-                        if let Some(p) = mux.panes.get(mux.active) {
+                        if let Some(p) = hmux.panes.get(hmux.active) {
                             p.write_input(&b);
                         }
                     }
-                    Action::NewPane => mux.spawn_pane()?,
+                    Action::NewPane => hmux.spawn_pane()?,
                     Action::ClosePane => {
-                        mux.close_active();
+                        hmux.close_active();
                         renderer.invalidate();
-                        if mux.panes.is_empty() {
+                        if hmux.panes.is_empty() {
                             return Ok(true);
                         }
                     }
-                    Action::NextPane => mux.cycle(true),
-                    Action::PrevPane => mux.cycle(false),
-                    Action::SelectPane(i) => mux.select(i),
+                    Action::NextPane => hmux.cycle(true),
+                    Action::PrevPane => hmux.cycle(false),
+                    Action::SelectPane(i) => hmux.select(i),
                     Action::GrowSidebar => {
-                        mux.sidebar_w = (mux.sidebar_w + 2).min(layout::SIDEBAR_MAX);
-                        let (c, r) = (mux.cols, mux.rows);
-                        mux.resize_all(c, r);
+                        hmux.sidebar_w = (hmux.sidebar_w + 2).min(layout::SIDEBAR_MAX);
+                        let (c, r) = (hmux.cols, hmux.rows);
+                        hmux.resize_all(c, r);
                         renderer.invalidate();
                     }
                     Action::ShrinkSidebar => {
-                        mux.sidebar_w = mux.sidebar_w.saturating_sub(2).max(layout::SIDEBAR_MIN);
-                        let (c, r) = (mux.cols, mux.rows);
-                        mux.resize_all(c, r);
+                        hmux.sidebar_w = hmux.sidebar_w.saturating_sub(2).max(layout::SIDEBAR_MIN);
+                        let (c, r) = (hmux.cols, hmux.rows);
+                        hmux.resize_all(c, r);
                         renderer.invalidate();
                     }
                     Action::Redraw => renderer.invalidate(),
@@ -333,11 +333,11 @@ fn handle(mux: &mut Mux, router: &mut Router, renderer: &mut Renderer, ev: Ev) -
                         if !m.pressed || m.button != 0 {
                             continue;
                         }
-                        let l = mux.layout();
+                        let l = hmux.layout();
                         if l.is_new_button(m.x, m.y) {
-                            mux.spawn_pane()?;
-                        } else if let Some(i) = l.button_at(m.x, m.y, mux.panes.len()) {
-                            mux.select(i);
+                            hmux.spawn_pane()?;
+                        } else if let Some(i) = l.button_at(m.x, m.y, hmux.panes.len()) {
+                            hmux.select(i);
                         }
                     }
                 }

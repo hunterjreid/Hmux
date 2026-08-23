@@ -30,7 +30,7 @@ use tauri::{
     WebviewUrl,
 };
 
-use mux::proto::SessionInfo;
+use hmux::proto::SessionInfo;
 use sessions::{SessionId, Sessions};
 
 /// How often the process table is walked to refresh idle/busy badges. Fast
@@ -43,12 +43,12 @@ const ACTIVITY_POLL: Duration = Duration::from_millis(400);
 /// so without this a failure is simply invisible — which is exactly how a
 /// terminal that never appeared went undiagnosed.
 pub fn log_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("mux.log")
+    std::env::temp_dir().join("hmux.log")
 }
 
 pub fn log_error(message: &str) {
     use std::io::Write;
-    eprintln!("mux: {message}");
+    eprintln!("hmux: {message}");
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -99,7 +99,7 @@ fn open_external(url: String) -> Result<(), String> {
 
 /// Who is running this, for the foot of the profile menu.
 ///
-/// The Windows account, because that is the only identity mux has. There is
+/// The Windows account, because that is the only identity hmux has. There is
 /// nothing to sign in to and nothing kept on a server, so a menu of the usual
 /// shape would be offering to log out of somewhere you were never logged in.
 /// The account name is the honest version of the same row.
@@ -351,16 +351,16 @@ fn list_shells() -> Vec<shells::Shell> {
 // Not `navigator.clipboard`. That refuses whenever the calling document is not
 // focused, and this window is several webviews — a right click lands on one of
 // them and the refusal is asynchronous and silent, which reads as the paste
-// doing nothing at all. See `mux::clipboard`.
+// doing nothing at all. See `hmux::clipboard`.
 
 #[tauri::command]
 fn clipboard_read() -> Result<String, String> {
-    mux::clipboard::read_text().map_err(|e| format!("{e:#}"))
+    hmux::clipboard::read_text().map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 fn clipboard_write(text: String) -> Result<(), String> {
-    mux::clipboard::write_text(&text).map_err(|e| format!("{e:#}"))
+    hmux::clipboard::write_text(&text).map_err(|e| format!("{e:#}"))
 }
 
 
@@ -553,6 +553,9 @@ fn main() {
             update::update_apply,
         ])
         .setup(|app| {
+            // Everything the old name left behind, before anything reads it.
+            persist::migrate_from_mux();
+
             // Anything a previous update moved aside. Done first and quietly:
             // the files are only removable once whatever was executing them has
             // exited, so the ones that stay are the ones still in use.
@@ -583,7 +586,7 @@ fn main() {
             // edges still works — an undecorated window keeps its frame, it
             // just stops painting a caption.
             let window = WindowBuilder::new(app, "main")
-                .title("mux")
+                .title("hmux")
                 .decorations(false)
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(900.0, 520.0)
@@ -667,5 +670,5 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running mux");
+        .expect("error while running hmux");
 }

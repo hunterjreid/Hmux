@@ -27,12 +27,29 @@ pub type SessionId = u32;
 /// restricts a pipe to the account that created it, so this is about not
 /// colliding rather than about access.
 pub fn pipe_name() -> String {
-    let user: String = std::env::var("USERNAME")
+    format!(r"\\.\pipe\hmux-{}", pipe_user())
+}
+
+/// The name this used when the project was called `mux`.
+///
+/// A client tries this after the real one and before starting a daemon of its
+/// own. The rename would otherwise have cost everybody every terminal they had
+/// open: the daemon holding them is still running and still perfectly healthy,
+/// and the only reason the new window could not see it is that the two halves
+/// of the same program now disagree about where to meet.
+///
+/// Only worth keeping until nobody is running a daemon old enough to have
+/// claimed it, which is however long it takes them to reboot.
+pub fn legacy_pipe_name() -> String {
+    format!(r"\\.\pipe\mux-{}", pipe_user())
+}
+
+fn pipe_user() -> String {
+    std::env::var("USERNAME")
         .unwrap_or_else(|_| "default".into())
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    format!(r"\\.\pipe\mux-{user}")
+        .collect()
 }
 
 /// Which direction a connection carries.

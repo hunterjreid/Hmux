@@ -13,15 +13,15 @@
 //!
 //! | Binary           | Running? | What happens |
 //! | ---------------- | -------- | ------------ |
-//! | `mux-gui.exe`    | yes      | moved aside, replaced, relaunched — you lose a window and get it straight back |
-//! | `mux.exe`        | no       | replaced |
-//! | `mux-daemon.exe` | yes      | moved aside, replaced, **not restarted** |
+//! | `hmux-gui.exe`    | yes      | moved aside, replaced, relaunched — you lose a window and get it straight back |
+//! | `hmux.exe`        | no       | replaced |
+//! | `hmux-daemon.exe` | yes      | moved aside, replaced, **not restarted** |
 //!
 //! The daemon is the one that must not be disturbed, and it is the one this
 //! deliberately does the least to. The new binary is put in place and the old
 //! one keeps running your shells from the file it was moved to. It is picked up
 //! whenever the daemon next starts, which is after it has been idle with
-//! nothing to hold — see `IDLE_EXIT` in `mux::daemon`. An update therefore
+//! nothing to hold — see `IDLE_EXIT` in `hmux::daemon`. An update therefore
 //! reaches the daemon late, and that is the right trade: a daemon restarted on
 //! time is a daemon that killed a build half way through.
 //!
@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 /// executables into the directory the app runs from, and the name comes over
 /// the IPC boundary from a webview that has just been talking to the network.
 /// Nothing outside this list is written, whatever it is called.
-const UPDATABLE: [&str; 3] = ["mux-gui.exe", "mux.exe", "mux-daemon.exe"];
+const UPDATABLE: [&str; 3] = ["hmux-gui.exe", "hmux.exe", "hmux-daemon.exe"];
 
 /// Where a downloaded binary waits until every one of them has arrived.
 ///
@@ -177,7 +177,7 @@ pub fn update_apply(app: tauri::AppHandle) -> Result<(), String> {
     // moment with no window. It attaches to the same daemon and finds the same
     // terminals, mid-command, which is what makes this feel like a restart of
     // the chrome rather than of the session.
-    let gui = dir.join("mux-gui.exe");
+    let gui = dir.join("hmux-gui.exe");
     std::process::Command::new(&gui)
         .spawn()
         .map_err(|e| format!("installed the update but could not start {}: {e}", gui.display()))?;
@@ -214,11 +214,11 @@ mod tests {
         // The name arrives over IPC from a webview that has been talking to the
         // network, and this function writes executables next to the running
         // one. Anything not on the list is refused by name.
-        assert!(checked_name("mux-gui.exe").is_ok());
-        assert!(checked_name("mux-daemon.exe").is_ok());
-        assert!(checked_name("mux.exe").is_ok());
+        assert!(checked_name("hmux-gui.exe").is_ok());
+        assert!(checked_name("hmux-daemon.exe").is_ok());
+        assert!(checked_name("hmux.exe").is_ok());
 
-        assert!(checked_name("mux-gui.exe.old").is_err());
+        assert!(checked_name("hmux-gui.exe.old").is_err());
         assert!(checked_name("MUX-GUI.EXE").is_err());
         assert!(checked_name("payload.dll").is_err());
     }
@@ -227,23 +227,23 @@ mod tests {
     fn a_path_cannot_be_smuggled_through_the_name() {
         // Exact matching means separators never have to be reasoned about:
         // there is no name containing one that is also on the list.
-        assert!(checked_name("..\\..\\mux-gui.exe").is_err());
-        assert!(checked_name("../../mux-gui.exe").is_err());
-        assert!(checked_name("C:\\Windows\\System32\\mux.exe").is_err());
-        assert!(checked_name("sub/mux.exe").is_err());
+        assert!(checked_name("..\\..\\hmux-gui.exe").is_err());
+        assert!(checked_name("../../hmux-gui.exe").is_err());
+        assert!(checked_name("C:\\Windows\\System32\\hmux.exe").is_err());
+        assert!(checked_name("sub/hmux.exe").is_err());
     }
 
     #[test]
     fn something_that_is_not_a_program_is_not_staged() {
         // A proxy or captive portal answering 200 with an HTML error page is
         // the realistic version of this, and installing it would leave the
-        // machine with no working mux rather than an out of date one.
+        // machine with no working hmux rather than an out of date one.
         let html = b"<!DOCTYPE html><html>error</html>".to_vec();
-        let err = update_stage("mux.exe".into(), html).unwrap_err();
+        let err = update_stage("hmux.exe".into(), html).unwrap_err();
         assert!(err.contains("not a program"), "{err}");
 
         let big_but_wrong = vec![b'<'; 128 * 1024];
-        let err = update_stage("mux.exe".into(), big_but_wrong).unwrap_err();
+        let err = update_stage("hmux.exe".into(), big_but_wrong).unwrap_err();
         assert!(err.contains("not a Windows executable"), "{err}");
     }
 

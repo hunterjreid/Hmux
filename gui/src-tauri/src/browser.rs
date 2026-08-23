@@ -39,7 +39,20 @@ const SEARCH: &str = "https://duckduckgo.com/?q=";
 /// for at startup whether or not the tabs are ever used — memory and a slower
 /// cold start, traded for pages that stay warm. It cannot be raised at runtime
 /// no matter how much anyone wants it to; see the module note.
-pub const POOL_SIZE: usize = 12;
+///
+/// Twelve was chosen when a terminal had one page. Tabs made a single terminal
+/// able to hold eight on its own, so three terminals reached the ceiling in
+/// ordinary use and the next tab failed — which is not a soft limit, it is the
+/// button not working. The honest fix is a bigger pool, because the reason
+/// this is fixed at all is that WebView2 cannot be created after the event
+/// loop starts, and no amount of cleverness at runtime gets around that.
+///
+/// The alternative considered and rejected: hand slots only to visible tabs
+/// and reclaim from background ones. That would make the ceiling invisible,
+/// and it would do it by throwing away the scroll position, form state and
+/// logins of every page you were not looking at — which is the exact thing
+/// having a browser per terminal exists to protect.
+pub const POOL_SIZE: usize = 24;
 
 /// Somewhere far to the left of any real monitor.
 const PARKED_X: f64 = -20_000.0;
