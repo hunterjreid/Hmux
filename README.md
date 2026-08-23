@@ -38,20 +38,24 @@ Needs Windows 10 1809 or newer, for ConPTY.
 
 ## The GUI — `cargo run --release -p hmux-gui`
 
-Terminals down the left, the active one filling the middle, and **that
-terminal's own browser** on the right.
+A rail of terminals down one side, the active one filling the middle, and
+**that terminal's own browser** on the other.
 
 ```
-┌──────────────┬──────────────────────────────────────────────────────┐
-│ MUX        + │                                   ◧   ─    □    ✕    │
-├──────────────┼──────────────────────────────┬───────────────────────┤
-│ ⌕ Search     │ Reply from 127.0.0.1         │         ────          │
-│ claude       │ Reply from 127.0.0.1         ├───────────────────────┤
-│   node     ◜ │ Reply from 127.0.0.1         │                       │
-│ cmd 2        │                              │     its own page      │
-│              │                              │                       │
-└──────────────┴──────────────────────────────┴───────────────────────┘
+┌──────────────────────────────────────────────────────┬──────────────┐
+│ HMUX       ◧                       ─    □    ✕       │            + │
+├───────────────────────┬──────────────────────────────┼──────────────┤
+│         ────          │ Reply from 127.0.0.1         │ ⌕ Search     │
+├───────────────────────┤ Reply from 127.0.0.1         │ claude       │
+│                       │ Reply from 127.0.0.1         │   node     ◜ │
+│     its own page      │                              │ cmd 2        │
+│                       │                              │              │
+└───────────────────────┴──────────────────────────────┴──────────────┘
 ```
+
+The rail is on the right by default: it is a list you glance at, the terminal
+is the thing you look at, and the window buttons are already up in that corner.
+**Settings → Layout** swaps the two, and the choice is remembered per window.
 
 Each terminal owns a browser, so switching terminals switches the page —
 scroll position, forms and logins all still there, because it is a separate

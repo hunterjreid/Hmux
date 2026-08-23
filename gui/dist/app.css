@@ -96,9 +96,8 @@
      around it is what makes it read as a hole in the window rather than one
      more panel of it.
 
-     This exact value is also the near-black the shipped dither backgrounds
-     were drawn against, so the scrim dims toward the colour their own dark
-     areas already are and a picture meets the terminal with no seam. */
+     It is also what shows through a background image, since the picture is a
+     faded layer over this rather than something painted onto it. */
   --term-bg: #0e0e0e;
 
   /* An image behind the terminal, when there is one. Empty by default, so
@@ -106,20 +105,19 @@
      colour above shows through. Set from the settings menu; see
      `applyBackground` in app.js. */
   --term-image: none;
-  /* How much of the image is dimmed away, as the opacity of a scrim in
-     --term-bg laid over it.
+  /* How present the picture is. Both are set per image by `applyBackground`;
+     these are only what a background with no opinion gets.
 
-     Only the default. `applyBackground` overwrites it from the stored choice,
-     because the right value depends entirely on the picture: this started at
-     0.92, which on the shipped image — already near-black and deliberately low
-     contrast — produced a four-level spread between #14 and #18. Not subtle,
-     invisible. A scrim tuned for a bright photograph erases a dark one, and
-     nothing in the stylesheet can know which it is dealing with, so it is a
-     setting rather than a constant.
+     Two knobs rather than one because they do different jobs. Brightness is
+     about the image: a landscape is mostly sky, and sky is the bright part, so
+     pulling the level down first is what leaves the shape of the land rather
+     than a pale rectangle. Opacity is about the terminal: whatever survives
+     the first step still has to disappear behind text.
 
-     The ANSI colours are untouched at every level, because the scrim is under
-     the glyphs and never over them. */
-  --term-image-dim: 0.82;
+     Both are low. Anything you can actually make out behind a terminal is
+     something you are reading past all day. */
+  --term-image-brightness: 0.55;
+  --term-image-opacity: 0.1;
 }
 
 * {
@@ -184,7 +182,11 @@ body {
 /* Dragging the splitter sets the width a frame at a time, and a transition
    turns that into the panel lagging behind the pointer. Motion is for a state
    change, not for something a hand is already moving. */
-.app.dragging {
+.app.dragging,
+/* And when the columns change for a reason the user did not aim at: moving to
+   a terminal whose panel happens to be in a different state. See
+   `applyBrowserVisibility`. */
+.app.no-slide {
   transition: none;
 }
 
@@ -1092,37 +1094,32 @@ body {
  * with no background pays for none of this and xterm keeps its opaque
  * fast path.
  */
-.app.has-bg .term-host {
-  background-image: var(--term-image);
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-}
-
-/* A generated pattern repeats at its own size instead of being stretched.
-   Scaling a dither to cover the pane magnifies its dots into blobs, which
-   throws away the only thing that made it a dither. */
-.app.has-bg.bg-tiled .term-host {
-  background-size: 320px 320px;
-  background-position: top left;
-  background-repeat: repeat;
-}
-
-/* The scrim, in the terminal's own colour.
+/* The picture is its own layer, under the text and over nothing.
  *
- * Dimming the image rather than fading the text: the glyphs are drawn above
- * this and keep their full contrast, so the palette is untouched and only the
- * picture loses its brightness. Doing it the other way round — a translucent
- * terminal over a bright image — is what makes every screenshot of this idea
- * unreadable. */
+ * It was the host element's own background with a scrim laid over it, which
+ * worked but could not be filtered: `filter` on an element applies to
+ * everything it paints, so desaturating the image would have desaturated every
+ * glyph on top of it. On a layer of its own the filter reaches the picture and
+ * nothing else, and the terminal's flat colour shows through underneath in
+ * place of the scrim.
+ *
+ * Greyscale because the images are landscapes and the terminal is not: a blue
+ * cast under white text reads as a screen with the colour balance wrong rather
+ * than as a background. Darkened before it is faded, so what is left is the
+ * shape of the thing rather than a grey wash of its average brightness. */
 .app.has-bg .term-host::before {
   content: "";
   position: absolute;
   inset: 0;
-  background: var(--term-bg);
-  opacity: var(--term-image-dim);
+  background-image: var(--term-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  filter: grayscale(1) brightness(var(--term-image-brightness));
+  opacity: var(--term-image-opacity);
   pointer-events: none;
 }
+
 
 /* The terminals are stacked in this box and would otherwise be painted under
    the scrim along with the image.

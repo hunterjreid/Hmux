@@ -41,6 +41,34 @@ const els = {
   winMaxIcon: document.getElementById("win-max-icon"),
 };
 
+/**
+ * Bring across everything the old name stored.
+ *
+ * Every preference this window keeps is under a `mux.` key, and the rename
+ * moved them all to `hmux.` — which does not migrate anything, it abandons it.
+ * The values are still in local storage, under names nothing reads any more,
+ * so the rename presented as the app quietly forgetting which side the rail
+ * was on, how big the text was, how wide the panels were, which terminals were
+ * pinned and which background was chosen.
+ *
+ * Runs before the first key is read, which is why it is up here rather than
+ * somewhere tidier. Copies rather than moves, and never overwrites a key that
+ * already exists, so it is idempotent and an older build still finds its own.
+ */
+(function carryOverOldKeys() {
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (!key.startsWith("mux")) continue;
+      const moved = `h${key}`;
+      if (localStorage.getItem(moved) === null) {
+        localStorage.setItem(moved, localStorage.getItem(key));
+      }
+    }
+  } catch {
+    // Storage disabled or full. The defaults are all reasonable.
+  }
+})();
+
 /** Ctrl+scroll adjusts this, which is the whole of the font UI. */
 /**
  * Terminal text size, per terminal.
@@ -322,13 +350,14 @@ function tabTitle(tab) {
  * even for a session started from nothing.
  */
 const MIRROR_KEY = "hmux.mirrored";
-// Not reflected by default: the rail on the left, the page on the right, which
-// is the layout the README describes and the one every screenshot of this app
-// shows. It defaulted the other way round for a while, so a fresh install
-// disagreed with its own documentation. The stored value still wins, so a
-// window that has been swapped stays swapped — this only decides what a window
-// with no opinion yet does.
-let mirrored = (localStorage.getItem(MIRROR_KEY) ?? "0") === "1";
+// Reflected by default: the terminals on the right, the page on the left.
+//
+// The rail is a list you glance at and the terminal is the thing you look at,
+// and the window buttons are in the top right — so the side the pointer is
+// already near is the side the terminal should be on. The stored value still
+// wins, so a window that has been swapped stays swapped; this only decides
+// what a window with no opinion yet does.
+let mirrored = (localStorage.getItem(MIRROR_KEY) ?? "1") === "1";
 
 function applyMirror() {
   els.app.classList.toggle("mirrored", mirrored);
@@ -358,7 +387,10 @@ function applyLoading() {
  * menu names the Windows user — the only identity involved — and there is no
  * "log out", which would be an offer to leave somewhere you have never been.
  */
-const HELP_PAGE = "https://github.com/hunterjreid/hmux#readme";
+/** The project's own page. Help goes here rather than to a README on GitHub:
+ *  this is the thing written for someone who wants to know what hmux is. */
+const HOME_SITE = "https://hmux.hunterjreid.com/";
+const HELP_PAGE = HOME_SITE;
 const FEEDBACK_PAGE = "https://github.com/hunterjreid/hmux/issues/new";
 
 /** Hand a link to the machine's browser rather than to the panel. */
@@ -442,20 +474,10 @@ function openSettings(pane = "root") {
 
     heading("Terminal background");
     option("None", !background, () => setBackground(""));
-    for (const { label, file, tile, dim } of SHIPPED_BACKGROUNDS) {
+    for (const { label, file, lit, at } of SHIPPED_BACKGROUNDS) {
       option(label, backgroundSource === file, () =>
-        useShippedBackground(file, !!tile, dim)
+        useShippedBackground(file, lit, at)
       );
-    }
-    // Anything set that did not come from the list above came from a file.
-    option("From a file…", !!background && !backgroundSource, chooseBackground);
-
-    // Only worth showing when there is something for it to act on.
-    if (background) {
-      heading("Background strength");
-      for (const { label, dim } of BG_STRENGTHS) {
-        option(label, backgroundDim === dim, () => setBackgroundDim(dim));
-      }
     }
   } else {
     item("#i-gear", "Settings", () => openSettings("settings"), {
@@ -532,63 +554,39 @@ let background = "";
 const BG_SOURCE_KEY = "hmux.bgSource";
 let backgroundSource = localStorage.getItem(BG_SOURCE_KEY) || "";
 
-/** Whether the current background repeats rather than covering. */
-const BG_TILE_KEY = "hmux.bgTile";
-let backgroundTiles = localStorage.getItem(BG_TILE_KEY) === "1";
-
 /**
- * What comes with the app. Kept short: this is a texture, not a gallery.
+ * One picture, and off.
  *
- * `tile` says the image repeats at its own size rather than being stretched to
- * fill. A photograph has to cover the pane or it looks like a sample of
- * itself; a generated pattern has a period, and stretching one over a wide
- * terminal blows the dots up into visible blobs and throws away the thing that
- * made it a dither.
- */
-/**
- * Each carries the strength it wants.
+ * There were six, plus a file picker, plus four strength levels — which is a
+ * gallery, and this is a terminal. Every one of them ends up at the same job:
+ * something to rest the eye on in the dark behind the text. Six ways to do
+ * that is five decisions nobody wanted to make, and the shipped images were
+ * most of the download.
  *
- * One number cannot serve all of them. The scrim dims toward the terminal's
- * own near-black, so what survives it depends entirely on how bright the
- * picture started: at the value that leaves `Daybreak` — a pale blue daylight
- * scene — as a faint haze, `Ridges` is gone completely, and at the value that
- * makes `Ridges` visible, `Daybreak` is a photograph you are trying to read
- * code off. Picking one sets the strength to suit it, and the strength setting
- * still overrides afterwards for anyone who disagrees.
+ * `lit` and `at` are the two knobs the picture carries: how far its level is
+ * pulled down before it is faded, and how far it is then faded. They live here
+ * rather than in the stylesheet because the right pair depends on how bright
+ * the image already is, and the image is the thing that knows.
  */
 const SHIPPED_BACKGROUNDS = [
-  { label: "Daybreak", file: "backgrounds/daybreak.jpg", dim: 0.94 },
-  { label: "Harbour", file: "backgrounds/harbour.jpg", dim: 0.88 },
-  { label: "Coast", file: "backgrounds/coast.jpg", dim: 0.88 },
-  { label: "Auckland", file: "backgrounds/auckland.webp", dim: 0.86 },
-  { label: "Ridges", file: "backgrounds/ridges.jpg", dim: 0.78 },
-  { label: "Diffusion", file: "backgrounds/dither.svg", tile: true, dim: 0.8 },
+  { label: "Daybreak", file: "backgrounds/daybreak.jpg", lit: 0.45, at: 0.07 },
 ];
 
 /** What a window with no opinion yet comes up with. */
 const DEFAULT_BACKGROUND = SHIPPED_BACKGROUNDS[0];
 
 /**
- * How far the scrim goes, as choices rather than a number.
+ * How the current background is rendered: how far its level is pulled down,
+ * and how far it is then faded.
  *
- * A setting because there is no right answer: the scrim is dimming toward the
- * terminal's own background, so how much of the picture survives depends on
- * how dark the picture already was. The same value that leaves a photograph
- * pleasantly muted erases a dark one completely — which is exactly what
- * happened to the shipped image at the first value tried.
- *
- * Named for what you see rather than for the opacity, which runs backwards:
- * more scrim is less picture, and a menu of decreasing numbers labelled
- * "stronger" is a menu people pick the wrong end of.
+ * Taken from the image rather than offered as a setting. There was a menu of
+ * four strengths, which existed because one number could not serve a pale
+ * daylight photograph and a near-black dither at once — but that is a fact
+ * about the pictures, and the pictures are the thing that knows it. Each one
+ * carries its own pair, so choosing a background is the whole of the choice.
  */
-const BG_STRENGTHS = [
-  { label: "Barely there", dim: 0.9 },
-  { label: "Subtle", dim: 0.82 },
-  { label: "Medium", dim: 0.65 },
-  { label: "Strong", dim: 0.4 },
-];
-const BG_DIM_KEY = "hmux.bgDim";
-let backgroundDim = Number(localStorage.getItem(BG_DIM_KEY)) || 0.82;
+let backgroundLit = DEFAULT_BACKGROUND.lit;
+let backgroundAt = DEFAULT_BACKGROUND.at;
 
 /**
  * Put the background on, or take it off.
@@ -603,14 +601,17 @@ let backgroundDim = Number(localStorage.getItem(BG_DIM_KEY)) || 0.82;
 function applyBackground() {
   const on = !!background;
   els.app.classList.toggle("has-bg", on);
-  els.app.classList.toggle("bg-tiled", on && backgroundTiles);
   document.documentElement.style.setProperty(
     "--term-image",
     on ? `url("${background}")` : "none"
   );
   document.documentElement.style.setProperty(
-    "--term-image-dim",
-    String(backgroundDim)
+    "--term-image-brightness",
+    String(backgroundLit)
+  );
+  document.documentElement.style.setProperty(
+    "--term-image-opacity",
+    String(backgroundAt)
   );
 
   for (const entry of terminals.values()) {
@@ -646,29 +647,19 @@ async function loadBackground() {
   if (!background && !localStorage.getItem(BG_CHOSEN_KEY)) {
     await useShippedBackground(
       DEFAULT_BACKGROUND.file,
-      !!DEFAULT_BACKGROUND.tile,
-      DEFAULT_BACKGROUND.dim
+      DEFAULT_BACKGROUND.lit,
+      DEFAULT_BACKGROUND.at
     );
     return;
   }
   applyBackground();
 }
 
-function setBackgroundDim(dim) {
-  backgroundDim = dim;
-  try {
-    localStorage.setItem(BG_DIM_KEY, String(dim));
-  } catch {}
-  applyBackground();
-}
-
-async function setBackground(data, source = "", tiles = false) {
+async function setBackground(data, source = "") {
   background = data || "";
   backgroundSource = background ? source : "";
-  backgroundTiles = !!background && tiles;
   try {
     localStorage.setItem(BG_SOURCE_KEY, backgroundSource);
-    localStorage.setItem(BG_TILE_KEY, backgroundTiles ? "1" : "0");
     // Any choice at all, including turning it off, is a choice — see
     // `BG_CHOSEN_KEY`.
     localStorage.setItem(BG_CHOSEN_KEY, "1");
@@ -682,7 +673,7 @@ async function setBackground(data, source = "", tiles = false) {
 }
 
 /** Turn one of the shipped images into a data URL, so both kinds are alike. */
-async function useShippedBackground(file, tiles, dim) {
+async function useShippedBackground(file, lit, at) {
   try {
     const response = await fetch(file);
     if (!response.ok) throw new Error(`${file}: HTTP ${response.status}`);
@@ -693,43 +684,12 @@ async function useShippedBackground(file, tiles, dim) {
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
-    // The image's own strength, unless the strength has been set by hand
-    // since — an explicit choice outlives switching pictures.
-    if (dim !== undefined && !localStorage.getItem(BG_DIM_KEY)) {
-      backgroundDim = dim;
-    }
-    await setBackground(data, file, tiles);
+    if (lit !== undefined) backgroundLit = lit;
+    if (at !== undefined) backgroundAt = at;
+    await setBackground(data, file);
   } catch (e) {
     showError("background", e);
   }
-}
-
-/**
- * Pick a file.
- *
- * A hidden `<input type="file">` rather than the native dialogue, which would
- * be another Tauri plugin and a capability in the manifest for one button.
- * The webview's own picker is the same Windows dialogue underneath.
- */
-function chooseBackground() {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = "image/*";
-  input.onchange = () => {
-    const file = input.files && input.files[0];
-    if (!file) return;
-    // Anything much larger than this is a photograph nobody will see at 8%
-    // opacity, and it is written to disk and read back on every launch.
-    if (file.size > 12 * 1024 * 1024) {
-      showError("background", "that image is over 12 MB — try a smaller one");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => setBackground(String(reader.result));
-    reader.onerror = () => showError("background", "could not read that file");
-    reader.readAsDataURL(file);
-  };
-  input.click();
 }
 
 /** The Windows user, read once. Only the profile menu wants it. */
@@ -757,7 +717,7 @@ async function showAbout() {
   } catch {}
   showError(
     "hmux",
-    `v${version} — terminals that keep running whether or not you are looking at them`
+    `v${version} — Hunter's Terminal Multiplexer · ${HOME_SITE}`
   );
 }
 
@@ -1452,6 +1412,21 @@ function applyBrowserVisibility(animate = false) {
   const slid = animate && open !== browserWasOpen;
   browserWasOpen = open;
 
+  // Switching terminals is not an animation.
+  //
+  // `animate` already decided not to run the slide, but the slide was only
+  // ever the native page being carried along — the columns themselves are
+  // transitioned in the stylesheet and moved anyway. So going from a terminal
+  // with a page open to one without played the panel closing, and going back
+  // played it opening, for a change you did not make to a panel you were not
+  // touching. Clicking down a rail of terminals became the window opening and
+  // shutting under you.
+  //
+  // The transition is suppressed for exactly the frame the columns change in,
+  // the same way a splitter drag does it, and restored immediately after so
+  // that opening the panel on purpose still slides.
+  if (!slid) els.app.classList.add("no-slide");
+
   els.app.classList.toggle("browser-closed", !open);
   els.browserBtn.classList.toggle("on", open);
   applyLoading();
@@ -1470,6 +1445,13 @@ function applyBrowserVisibility(animate = false) {
     slideBrowser();
     return;
   }
+
+  // Off again once the columns have taken their new width, so an intentional
+  // open still slides. Two frames: one for the change to be applied, one for
+  // it to have been painted without a transition attached.
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => els.app.classList.remove("no-slide"))
+  );
 
   // Nothing is animating, so stop anything that still is.
   //
