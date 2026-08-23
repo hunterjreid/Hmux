@@ -471,6 +471,29 @@ fn browser_layout(
 }
 
 /// Claim a browser for a tab. Idempotent: asking twice gives the same one.
+/// How many pages can be open at once. Asked for rather than repeated, because
+/// the copy of this number that lived in the UI said twelve for a while after
+/// the pool was doubled, and the only place it showed up was the message
+/// telling you why you could not open another one.
+#[tauri::command]
+fn browser_pool_size() -> usize {
+    browser::POOL_SIZE
+}
+
+/// Whether every browser in the pool has actually been created.
+///
+/// They are all asked for during `setup`, which returns before the last of
+/// them exists: the webviews appear in the app's registry as they come up, and
+/// with twenty-four of them the tail takes long enough that a session restore
+/// beats it there. The symptom was `browser 12 is missing` and upwards, one
+/// per page that had been given a slot at the far end of a pool that was not
+/// finished being built. It could not happen when the pool was twelve, which
+/// is why doubling it introduced it.
+#[tauri::command]
+fn browser_pool_ready(app: tauri::AppHandle) -> bool {
+    (0..browser::POOL_SIZE).all(|slot| app.get_webview(&browser::slot_label(slot)).is_some())
+}
+
 #[tauri::command]
 fn browser_claim(
     pool: tauri::State<'_, Mutex<browser::Pool>>,
@@ -601,6 +624,8 @@ fn main() {
             clipboard_read,
             clipboard_write,
             browser_layout,
+            browser_pool_size,
+            browser_pool_ready,
             browser_claim,
             browser_release,
             browser_navigate,

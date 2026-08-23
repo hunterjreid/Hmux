@@ -186,26 +186,86 @@ function activeTab(entry) {
  * a real limit rather than a failure: they are all built before the window
  * opens and there is no making another.
  */
+/**
+ * Give up the page nobody is looking at, so a new one can be opened.
+ *
+ * The pool is fixed and small, because a browser cannot be created after the
+ * event loop starts. Running out used to be the end of it: every link click
+ * after the twenty-fourth failed, and the only way back was closing tabs by
+ * hand across however many terminals had one.
+ *
+ * Reclaiming has a real cost, which is why it was avoided at first. A page
+ * taken back loses its scroll position, its forms and anything behind a login,
+ * and that state is the whole argument for a browser per terminal. So the
+ * victim is chosen to make it hurt as little as possible: never a tab you are
+ * looking at, never the active tab of any terminal, and of what is left, the
+ * one gone longest without being touched.
+ *
+ * Returns whether anything was freed.
+ */
+async function reclaimTab() {
+  // Never while a session is being rebuilt.
+  //
+  // Restoring adds tabs one at a time, and each one becomes its terminal's
+  // active tab as it arrives, which makes the one before it eligible to be
+  // taken. So a restore that reached the ceiling started eating the tabs it
+  // had just put back: they were claimed, then reclaimed, then failed to
+  // navigate because the browser they had been given was already somewhere
+  // else. The budget is what keeps a restore inside its means; reclaiming is
+  // for afterwards, when there is a person choosing to open something.
+  if (restoring) return false;
+
+  let victim = null;
+  for (const [, other] of terminals) {
+    for (const tab of tabsOf(other)) {
+      if (tab.id === other.activeTab) continue;
+      if (!victim || (tab.usedAt || 0) < (victim.tab.usedAt || 0)) {
+        victim = { entry: other, tab };
+      }
+    }
+  }
+  if (!victim) return false;
+  logInfo(`reclaimed a browser from tab ${victim.tab.id} (${victim.tab.url})`);
+  await closeTab(victim.entry, victim.tab.id);
+  return true;
+}
+
 async function addTab(entry, url = HOME_PAGE) {
-  const tab = { id: nextTabId++, url, title: "" };
-  let claimed = false;
-  try {
-    claimed = await invoke("browser_claim", { tab: tab.id });
-  } catch (e) {
-    showError("new tab", e);
-    return null;
+  const tab = { id: nextTabId++, url, title: "", usedAt: performance.now() };
+
+  const claim = async () => {
+    try {
+      return await invoke("browser_claim", { tab: tab.id });
+    } catch (e) {
+      showError("new tab", e);
+      return null;
+    }
+  };
+
+  let claimed = await claim();
+  if (claimed === null) return null;
+
+  // One retry, after giving up the least recently used page.
+  if (!claimed && (await reclaimTab())) {
+    claimed = await claim();
+    if (claimed === null) return null;
   }
+
   if (!claimed) {
-    showError("new tab", `no browser left: all ${POOL_LIMIT_HINT} pages are open`);
+    showError(
+      "new tab",
+      `all ${poolSize || "the"} browsers are open and every one of them is in front of a terminal. Close a tab.`
+    );
     return null;
   }
+
   tabsOf(entry).push(tab);
   entry.activeTab = tab.id;
   return tab;
 }
 
-/** Only used to word the message above; the real limit lives in Rust. */
-const POOL_LIMIT_HINT = 12;
+/** The real limit, asked for at startup. Zero until the answer arrives. */
+let poolSize = 0;
 
 async function closeTab(entry, tabId) {
   const tabs = tabsOf(entry);
@@ -243,6 +303,9 @@ function selectTab(entry, tabId) {
   if (!tabsOf(entry).some((t) => t.id === tabId)) return;
   entry.activeTab = tabId;
   const tab = activeTab(entry);
+  // Recency, for `reclaimTab`. Looking at a page is the only evidence there is
+  // that you still want it.
+  if (tab) tab.usedAt = performance.now();
   els.url.value = tab && tab.url !== HOME_PAGE ? tab.url : "";
   renderTabs();
   applyLoading();
@@ -846,6 +909,11 @@ function makeTerminal(id, initial = null) {
     // to get there — and a session that talks for an hour goes through ten
     // thousand lines without trying.
     scrollback: 50000,
+    // Rows per notch of the wheel. xterm multiplies this by the wheel's own
+    // delta over the cell height, so it is a scale on top of whatever Windows
+    // reports rather than a row count. Named here so it is a number to turn
+    // rather than a default to discover.
+    scrollSensitivity: 1,
     // A terminal made while a background is set has to be see-through from the
     // start. `applyBackground` only reaches the terminals that already exist,
     // and a new one opened afterwards would otherwise be the single opaque
@@ -909,10 +977,28 @@ function makeTerminal(id, initial = null) {
    * first. `term.paste` wraps it or does not, according to the mode the shell
    * actually set.
    */
+  // What was selected when the right button went down.
+  //
+  // Read on mousedown rather than in the context menu handler, because by the
+  // time that fires the selection may already be gone: a press inside the
+  // terminal is a press as far as the emulator is concerned, and clearing the
+  // selection on it is reasonable behaviour that happens to land between the
+  // two events. Right-clicking a selection then pasted over it instead of
+  // copying it, which is the worst possible way to get that wrong.
+  let selectionAtPress = "";
+  view.addEventListener(
+    "mousedown",
+    (e) => {
+      if (e.button === 2) selectionAtPress = term.getSelection();
+    },
+    true
+  );
+
   view.addEventListener("contextmenu", async (e) => {
     e.preventDefault();
 
-    const selection = term.getSelection();
+    const selection = term.getSelection() || selectionAtPress;
+    selectionAtPress = "";
     if (selection) {
       try {
         await invoke("clipboard_write", { text: selection });
@@ -1246,14 +1332,25 @@ const resizeTimers = new Map();
  */
 function preservingView(entry, change) {
   const buffer = entry.term.buffer.active;
+
+  // Asked once, up front, and never inferred later.
+  //
+  // This used to decide "were you at the bottom" by whether a marker had been
+  // obtained, which is a different question with the same answer most of the
+  // time. `registerMarker` returns nothing when the offset it is handed is out
+  // of range, which happens exactly when you have scrolled a long way back,
+  // and the no-marker branch scrolled to the bottom. So scrolling up and then
+  // touching anything that refits threw you to the end of the buffer: the
+  // further back you were, the more likely it was to happen.
+  const atBottom = buffer.viewportY >= buffer.baseY;
+  const wasAt = buffer.viewportY;
+
   let anchor = null;
-  if (buffer.viewportY < buffer.baseY) {
+  if (!atBottom) {
     try {
       // Markers are placed relative to the cursor, so an absolute row has to
       // be expressed as a distance from it.
-      anchor = entry.term.registerMarker(
-        buffer.viewportY - (buffer.baseY + buffer.cursorY)
-      );
+      anchor = entry.term.registerMarker(wasAt - (buffer.baseY + buffer.cursorY));
     } catch {
       anchor = null;
     }
@@ -1262,24 +1359,23 @@ function preservingView(entry, change) {
   try {
     change();
   } finally {
-    if (anchor) {
-      // A disposed marker reports -1: the line it was watching fell out of the
-      // scrollback, and there is nowhere left to go back to.
-      if (anchor.line >= 0) entry.term.scrollToLine(anchor.line);
-      anchor.dispose();
-    } else {
-      // Being at the bottom has to be restored too.
-      //
-      // There is no marker for it, because the bottom is not a line — it is
-      // wherever the last one ends up, and a reflow moves that. Doing nothing
-      // here relied on xterm keeping the viewport pinned through a resize,
-      // which it does not quite: a rewrap that changes the total row count
-      // leaves the view a few rows short, so the prompt you were typing at
-      // sits just above the fold. It was survivable when a fit happened on a
-      // splitter drag and is not now that one happens whenever the box
-      // changes at all.
+    if (atBottom) {
+      // The bottom is not a line, it is wherever the last one ended up, and a
+      // reflow moves that. xterm does not quite keep the viewport pinned
+      // through a resize, so this is what stops the prompt you are typing at
+      // sitting just above the fold.
       entry.term.scrollToBottom();
+    } else if (anchor && anchor.line >= 0) {
+      entry.term.scrollToLine(anchor.line);
+    } else {
+      // Scrolled back, but no marker survived: the line it watched fell out of
+      // the scrollback, or one could not be made. Hold the row number we had
+      // rather than jumping to the end, which is wrong by however far you had
+      // scrolled and is the one outcome you would notice.
+      const now = entry.term.buffer.active;
+      entry.term.scrollToLine(Math.max(0, Math.min(wasAt, now.baseY)));
     }
+    if (anchor) anchor.dispose();
   }
 }
 
@@ -1351,6 +1447,18 @@ function fitTerminal(id, entry) {
   }
   if (!proposed || !proposed.cols || !proposed.rows) return;
   if (proposed.cols < 10 && box.clientWidth > 400) return;
+
+  // A fit that would change nothing does nothing.
+  //
+  // This is the important one for scrolling. The observer fires on any change
+  // to the box, and almost all of those settle on the size the terminal is
+  // already at, but the fit still ran: it reflowed, and then put the viewport
+  // back where it thought you were. Every one of those is a chance to be
+  // wrong, and being wrong looks like the page jumping while you scroll. Doing
+  // nothing when there is nothing to do removes the whole class of it.
+  if (proposed.cols === entry.term.cols && proposed.rows === entry.term.rows) {
+    return;
+  }
 
   let fitted = true;
   preservingView(entry, () => {
@@ -1577,17 +1685,78 @@ function applyBrowserVisibility(animate = false) {
  * beside that shell, so the panel comes out if it was closed rather than the
  * page being handed to another application.
  */
+/**
+ * Whether two addresses point at the same page.
+ *
+ * Loose on purpose: a scheme that was not typed, a trailing slash, and a
+ * default port are all differences that no one means. Anything more than that
+ * is a different page and gets its own tab.
+ */
+function sameAddress(a, b) {
+  const key = (raw) => {
+    if (!raw) return "";
+    let v = String(raw).trim().toLowerCase();
+    if (!/^[a-z]+:/.test(v)) v = `http://${v}`;
+    try {
+      const u = new URL(v);
+      const port = (u.protocol === "http:" && u.port === "80") ||
+        (u.protocol === "https:" && u.port === "443")
+        ? ""
+        : u.port;
+      const path = u.pathname.replace(/\/+$/, "");
+      return `${u.protocol}//${u.hostname}${port ? ":" + port : ""}${path}${u.search}`;
+    } catch {
+      return v.replace(/\/+$/, "");
+    }
+  };
+  return key(a) === key(b);
+}
+
 async function openInBrowserPanel(id, url) {
   const entry = terminals.get(id);
   if (!entry || !url) return;
 
   if (id !== activeId) await selectTerminal(id);
 
-  // A link opens a new tab rather than replacing the page you are on. The
-  // whole reason for having tabs is that following something from a terminal
-  // should not cost you what you were already reading.
-  if (!(await addTab(entry, url))) return;
+  // Already open beside this terminal? Go to it rather than opening it twice.
+  //
+  // Every click used to take a browser out of the pool and never give it back,
+  // so clicking the same dev-server link six times cost six of the twenty-four
+  // and left six identical tabs. Reaching the ceiling that way is not a limit
+  // anyone hit deliberately: it is the same page, and the second copy of it
+  // was never wanted.
+  //
+  // Compared after normalising, because the address that comes back from a
+  // navigate has been through `normalise_url` and the one in a terminal's
+  // output has not: `127.0.0.1:5180` and `http://127.0.0.1:5180/` are the same
+  // page and would otherwise be two tabs.
+  const same = (a, b) => sameAddress(a, b);
+  const existing = tabsOf(entry).find((t) => same(t.url, url));
+  if (existing) {
+    entry.activeTab = existing.id;
+    existing.usedAt = performance.now();
+    if (!entry.browserOpen) {
+      entry.browserOpen = true;
+      applyBrowserVisibility(true);
+      renderButtons();
+    }
+    renderTabs();
+    els.url.value = existing.url;
+    pushBrowserBounds(true);
+    saveLayoutSoon();
+    return;
+  }
 
+  const tab = await addTab(entry, url);
+
+  // The panel opens whether or not a page could be had.
+  //
+  // This used to return here when no browser was free, which is every time the
+  // pool is spoken for, and it returned without opening anything and without
+  // saying anything. Clicking a link in a terminal did nothing at all: no
+  // panel, no page, no error, no way to tell the difference between a link
+  // that failed and one that was never a link. The panel carries the note
+  // explaining the limit, so opening it is what makes the limit visible.
   if (!entry.browserOpen) {
     entry.browserOpen = true;
     applyBrowserVisibility(true);
@@ -1595,6 +1764,11 @@ async function openInBrowserPanel(id, url) {
   }
   renderTabs();
   saveLayoutSoon();
+
+  if (!tab) {
+    showError("open", "every browser is in use. Close a tab to free one.");
+    return;
+  }
 
   els.url.value = url;
   await go();
@@ -1728,10 +1902,23 @@ function closeAddressBar() {
 
 /** `shell` of null means whichever one Rust judges best on this machine. */
 async function newTerminal(shell = null) {
+  // Longer than the daemon client's own wait, deliberately.
+  //
+  // This was ten seconds against a fifteen second timeout on the Rust side, so
+  // the window gave up first and reported a failure for a shell that was in
+  // fact being started: the daemon logged `spawned powershell.exe` and the
+  // reply arrived to nobody. Two authorities disagreeing about how long to
+  // wait is worse than either number, because the shorter one turns a slow
+  // success into an error and an orphan.
+  //
+  // It is slow in the first place because a reply queues behind terminal
+  // output on the same stream, so a create issued while something is printing
+  // hard waits for it. `refresh` adopts anything that turns up regardless, so
+  // the worst case is now a pause rather than a lost terminal.
   // 80x24 is a placeholder; the real size is sent by syncSize once laid out.
   const id = await withTimeout(
     invoke("create_terminal", { shell, cols: 80, rows: 24 }),
-    10000,
+    20000,
     "create_terminal"
   );
   makeTerminal(id);
@@ -1892,16 +2079,15 @@ function wantedState(info) {
 /**
  * The spinner.
  *
- * Twenty of these were built and looked at side by side, and jitter is the one
- * that won. It is also the odd one out: every other variant is a smooth eased
- * curve, and this is a linear stagger that never quite settles, which is what
- * makes it read as work happening rather than as an ornament keeping time.
+ * Twenty of these were built and looked at side by side. Fade is the quietest
+ * of them and the one that survives being on screen all day: brightness
+ * travelling along three dots that never move, so nothing in the rail shifts
+ * position while you are reading a name next to it.
  *
- * The other nineteen are still in `app.css` and still work. Putting any of them
- * back is one word here; making it random again is restoring the picker this
- * replaced.
+ * The other nineteen are still in `app.css` and still work. Putting any of
+ * them back is one word here.
  */
-const SPINNER = "v-jitter";
+const SPINNER = "v-fade";
 
 function updateRightSlot(row, info) {
   const wanted = wantedState(info);
@@ -2234,6 +2420,10 @@ function renderButtons() {
     row.ondragstart = (e) => {
       draggingId = info.id;
       row.classList.add("dragging-row");
+      // Marks the whole list as a drop target for the duration, which is what
+      // makes it obvious the rail is the thing you are dropping into rather
+      // than something you happen to be dragging over.
+      els.list.classList.add("reordering");
       // Firefox refuses to start a drag without data on the transfer.
       try {
         e.dataTransfer.setData("text/plain", key);
@@ -2242,8 +2432,9 @@ function renderButtons() {
     };
     row.ondragend = () => {
       draggingId = null;
+      els.list.classList.remove("reordering");
       for (const el of els.list.children) {
-        el.classList.remove("dragging-row", "drop-before");
+        el.classList.remove("dragging-row", "drop-before", "drop-after");
       }
     };
     row.ondragover = (e) => {
@@ -2255,7 +2446,13 @@ function renderButtons() {
       // row able to mean "after it".
       const box = row.getBoundingClientRect();
       const after = e.clientY > box.top + box.height / 2;
-      for (const el of els.list.children) el.classList.remove("drop-before");
+      // Both classes cleared, not just one. `drop-after` was only ever added
+      // and never removed, so once you had hovered past the last row that line
+      // stayed drawn for the rest of the drag and the rail showed two
+      // insertion points at once.
+      for (const el of els.list.children) {
+        el.classList.remove("drop-before", "drop-after");
+      }
       const target = after ? row.nextElementSibling : row;
       if (target) target.classList.add("drop-before");
       else row.classList.add("drop-after");
@@ -2274,6 +2471,10 @@ function renderButtons() {
         if (pinned.has(info.id)) pinned.add(draggingId);
         else pinned.delete(draggingId);
         savePinned();
+      }
+      els.list.classList.remove("reordering");
+      for (const el of els.list.children) {
+        el.classList.remove("dragging-row", "drop-before", "drop-after");
       }
       moveRow(draggingId, beforeId, ids);
     };
@@ -2298,6 +2499,9 @@ function renderButtons() {
   document.title = active ? `${displayName(active)} — hmux` : "hmux";
 }
 
+/** Guards against a second poll adopting the same terminal mid-attach. */
+const adopting = new Set();
+
 async function refresh() {
   try {
     applyInfos(await invoke("list_terminals"));
@@ -2308,6 +2512,33 @@ async function refresh() {
 
 function applyInfos(infos) {
   const now = performance.now();
+
+  // Take on anything the daemon has that this window does not.
+  //
+  // A terminal can exist without the window knowing: a create whose reply came
+  // back too late, or one started by another window against the same daemon.
+  // The rail lists whatever the daemon reports, so without this those appear
+  // as rows that cannot be opened, which is a worse outcome than the error
+  // that produced them.
+  //
+  // `makeTerminal` attaches and replays, so adopting one is the same operation
+  // as opening the window on it in the first place.
+  for (const info of infos) {
+    if (terminals.has(info.id)) continue;
+    if (adopting.has(info.id)) continue;
+    adopting.add(info.id);
+    try {
+      makeTerminal(info.id, {
+        cols: info.cols > 0 ? info.cols : 80,
+        rows: info.rows > 0 ? info.rows : 24,
+      });
+      logInfo(`adopted terminal ${info.id}`);
+    } catch (e) {
+      logInfo(`could not adopt terminal ${info.id}: ${e}`);
+    }
+    adopting.delete(info.id);
+  }
+
   for (const info of infos) {
     const entry = terminals.get(info.id);
     if (!entry) continue;
@@ -2609,6 +2840,19 @@ async function attachToLive(live, saved) {
  * saved with more tabs than the pool can serve comes back with as many as fit,
  * in order, rather than failing to open at all.
  */
+/**
+ * How many browsers a restore is allowed to take, leaving the rest free.
+ *
+ * A session restored to the last slot is a window that cannot open a link
+ * until you close something, on every launch, forever. Whatever is left over
+ * is the headroom for the next thing you click.
+ */
+const RESTORE_BUDGET = 18;
+let restoreSpend = 0;
+
+/** True while the session is being rebuilt; see `reclaimTab`. */
+let restoring = false;
+
 async function restoreTabs(entry, remembered) {
   const urls = Array.isArray(remembered.tabs) && remembered.tabs.length
     ? remembered.tabs
@@ -2616,9 +2860,26 @@ async function restoreTabs(entry, remembered) {
       ? [remembered.url]
       : [];
 
-  for (const url of urls) {
+  // The page that was in front comes back first.
+  //
+  // Restoring in saved order and stopping at the budget gives whichever
+  // terminals were restored first all the browsers, and the ones after them
+  // none, which has nothing to do with what you were using. Putting each
+  // terminal's own active page first means every terminal gets the one that
+  // matters before any of them gets a second.
+  const at = Math.min(remembered.activeTab || 0, Math.max(0, urls.length - 1));
+  const ordered = urls.length ? [urls[at], ...urls.filter((_, i) => i !== at)] : [];
+
+  for (const url of ordered) {
+    if (restoreSpend >= RESTORE_BUDGET) {
+      logInfo(
+        `not reopening ${url}: the restore budget of ${RESTORE_BUDGET} browsers is spent`
+      );
+      break;
+    }
     const tab = await addTab(entry, url || HOME_PAGE);
     if (!tab) break;
+    restoreSpend += 1;
     // Actually load it, rather than only remembering the address.
     //
     // A tab that knows where it should be but whose browser is still on the
@@ -2635,9 +2896,9 @@ async function restoreTabs(entry, remembered) {
     }
   }
 
+  // The active page was restored first, so it is the first tab there is.
   const tabs = tabsOf(entry);
-  const at = Math.min(remembered.activeTab || 0, Math.max(0, tabs.length - 1));
-  entry.activeTab = tabs.length ? tabs[at].id : null;
+  entry.activeTab = tabs.length ? tabs[0].id : null;
 
   // Only if there is a page in it. A browser left on the new tab page comes
   // back as half a window of search box next to a terminal it has nothing to
@@ -2657,7 +2918,42 @@ async function restoreTabs(entry, remembered) {
  * rule to say where the old ends and the new begins. Restoring the text but
  * silently starting somewhere else would be the worst of both.
  */
+/**
+ * Wait until every browser in the pool exists.
+ *
+ * `setup` asks for all of them and returns before the last one is up, so a
+ * restore that starts immediately hands pages to slots that do not exist yet
+ * and they fail to load with nothing to retry them. Bounded, because a pool
+ * that never finishes is a reason to carry on with a degraded window rather
+ * than to sit at a blank one forever.
+ */
+async function waitForBrowsers(ms = 6000) {
+  const until = performance.now() + ms;
+  for (;;) {
+    try {
+      if (await invoke("browser_pool_ready")) return true;
+    } catch {
+      return false;
+    }
+    if (performance.now() > until) {
+      logInfo("carrying on: the browser pool did not finish starting in time");
+      return false;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 async function restoreOrStart() {
+  restoring = true;
+  await waitForBrowsers();
+  try {
+    await restoreOrStartInner();
+  } finally {
+    restoring = false;
+  }
+}
+
+async function restoreOrStartInner() {
   let saved = null;
   try {
     saved = await invoke("load_layout");
@@ -3113,6 +3409,11 @@ async function main() {
   restorePanelWidths();
   fitPanelsToWindow();
   applyMirror();
+  // Before any tab is claimed, so a failure can say the real number.
+  try {
+    poolSize = await invoke("browser_pool_size");
+  } catch {}
+
   // Awaited, and before any terminal is made: a terminal is constructed either
   // see-through or not, so this has to be known first or the ones restored at
   // startup come back opaque over the picture.

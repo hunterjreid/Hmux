@@ -698,21 +698,93 @@ body {
 
 /* ---------- dragging a row ---------- */
 
-/* The row being carried. Left in place at low opacity rather than removed, so
-   the list does not reflow under the pointer while you are aiming at it. */
+/* The colour reordering speaks in. Not the accent, which is already the
+   focus ring and the pinned tick, and not the busy green, which means a
+   terminal is working. A drag is a third kind of thing and gets its own. */
+:root {
+  --drop: #e619ff;
+}
+
+/* The list, while a row is in the air. A faint wash and a dashed edge so it
+   reads as a container you are dropping into, rather than as a list that
+   happens to have something moving over it. */
+.rail-list.reordering {
+  background: rgba(230, 25, 255, 0.04);
+  outline: 1px dashed rgba(230, 25, 255, 0.28);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+/* The row being carried. Left in place rather than removed, so the list does
+   not reflow under the pointer while you are aiming at it, but faded and
+   flattened enough that it clearly is not where it lives any more. */
 .term-btn.dragging-row {
-  opacity: 0.4;
+  opacity: 0.3;
+  transform: scale(0.98);
+  cursor: grabbing;
 }
 
-/* Where it would land. A line between rows rather than a highlight on one,
-   because the question being answered is "between which two", and highlighting
-   a row answers "onto which". */
-.term-btn.drop-before {
-  box-shadow: inset 0 2px 0 -0.5px var(--accent);
-}
-
+/*
+ * Where it would land.
+ *
+ * A line drawn in the gap between two rows, not a shadow inset into one of
+ * them. The question being answered is "between which two", and anything
+ * painted inside a row answers "onto which" instead, which is why the old
+ * indicator was unreadable: a two pixel blue line tucked inside the top edge
+ * of a row, three pixels away from an identical looking gap.
+ *
+ * The dot on the leading end is the part that makes it unambiguous. A bare
+ * line can be read as an underline belonging to the row above it; a line with
+ * a terminal on one end reads as an insertion point.
+ */
+.term-btn.drop-before,
 .term-btn.drop-after {
-  box-shadow: inset 0 -2px 0 -0.5px var(--accent);
+  position: relative;
+}
+
+.term-btn.drop-before::after,
+.term-btn.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--drop);
+  box-shadow: 0 0 7px rgba(230, 25, 255, 0.55);
+  pointer-events: none;
+}
+
+/* Centred in the three pixel gap above the row. */
+.term-btn.drop-before::after {
+  top: -2.5px;
+}
+
+/* Only ever the last row, so this one sits under it. */
+.term-btn.drop-after::after {
+  bottom: -2.5px;
+}
+
+/* The end cap. */
+.term-btn.drop-before::before,
+.term-btn.drop-after::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--drop);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.term-btn.drop-before::before {
+  top: -4.5px;
+}
+
+.term-btn.drop-after::before {
+  bottom: -4.5px;
 }
 
 .term-btn .name {
