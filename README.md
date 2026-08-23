@@ -224,6 +224,7 @@ GUI:
 | `Ctrl+Shift+L` | open the browser's address bar |
 | `Esc` | put it away again |
 | `F2` | rename the terminal the rail has focus on |
+| `F11` | fullscreen, and back |
 | `Ctrl+scroll` | font size |
 
 ## How it works

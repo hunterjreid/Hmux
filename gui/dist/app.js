@@ -652,6 +652,24 @@ async function loadBackground() {
     );
     return;
   }
+
+  // One of the shipped images is re-read from the app rather than trusted
+  // from disk.
+  //
+  // Choosing a background copies it into `%APPDATA%` as a data URL, which is
+  // right for a file of your own: it has to keep working when the original is
+  // moved. For an image that ships inside the app it is exactly wrong. The
+  // copy is a snapshot of whatever the picture looked like on the day it was
+  // picked, so shipping a new version of it changed nothing for anybody who
+  // already had it, and the only way back was to turn the background off and
+  // on again. Re-reading costs one request against a file already inside the
+  // binary, and means the picture belongs to the build.
+  const shipped = SHIPPED_BACKGROUNDS.find((b) => b.file === backgroundSource);
+  if (shipped) {
+    await useShippedBackground(shipped.file, shipped.lit, shipped.at);
+    return;
+  }
+
   applyBackground();
 }
 
@@ -924,6 +942,12 @@ function makeTerminal(id, initial = null) {
     term.resize(initial.cols, initial.rows);
   }
 
+  // Output is the only thing that can put lines above the viewport, and this
+  // is the hook that fires when any lands.
+  term.onRender(() => {
+    if (id === activeId) refreshScrollbackState();
+  });
+
   // Every keystroke goes straight to the pty. No local echo — the shell echoes.
   //
   // Except this terminal's answers to the shell's own questions. A program can
@@ -943,6 +967,12 @@ function makeTerminal(id, initial = null) {
   // the shell's, and taking it would be a worse trade than a longer chord.
   term.attachCustomKeyEventHandler((e) => {
     if (e.ctrlKey && e.shiftKey && (e.key === "L" || e.key === "l")) return false;
+    // F11 belongs to the window, not the shell. Returning false keeps xterm
+    // from forwarding it down the pty, and the window handler still sees it.
+    // Almost nothing in a terminal binds F11, and a fullscreen key that only
+    // works when the terminal does not have focus is a fullscreen key that
+    // never works.
+    if (e.key === "F11") return false;
     return true;
   });
 
@@ -1363,6 +1393,28 @@ function fitTerminal(id, entry) {
  * repaint its whole screen, so the terminal you just opened redraws itself in
  * front of you, and a full-screen program draws its banner a second time.
  */
+/**
+ * Whether the terminal on screen has anything above the viewport.
+ *
+ * `baseY` is how many lines have scrolled off the top, so zero means the whole
+ * buffer fits and there is nowhere to go back to. xterm reserves its scrollbar
+ * either way, which on a freshly opened terminal drew a slider filling its own
+ * track: a control that is telling you there is nothing to scroll, by being
+ * the same size as the thing it scrolls.
+ *
+ * Cheap enough to call from the render hook. It reads one number and only
+ * touches the DOM when the answer changes.
+ */
+let hasScrollback = false;
+
+function refreshScrollbackState() {
+  const entry = activeId === null ? null : terminals.get(activeId);
+  const has = !!entry && entry.term.buffer.active.baseY > 0;
+  if (has === hasScrollback) return;
+  hasScrollback = has;
+  els.host.classList.toggle("has-scrollback", has);
+}
+
 async function selectTerminal(id) {
   if (!terminals.has(id)) return;
   activeId = id;
@@ -1370,6 +1422,9 @@ async function selectTerminal(id) {
   for (const [tid, entry] of terminals) {
     entry.view.classList.toggle("visible", tid === id);
   }
+
+  // The new terminal has its own buffer and its own answer.
+  refreshScrollbackState();
 
   // No replay here: the xterm instance has been receiving this session's
   // output since it was created, whether or not it was on screen. Showing it
@@ -2742,11 +2797,26 @@ function hideUpdateModal() {
  * next time is the kind of thing you stop bothering to do. Stored per variable
  * name, so adding a third splitter needs nothing here.
  */
+/**
+ * The widths you actually chose, as opposed to the widths that currently fit.
+ *
+ * These are two different numbers and conflating them is what made the rail
+ * shrink a little on every launch. See `fitPanelsToWindow`.
+ */
+const wanted = { "--rail-w": 0, "--browser-w": 0 };
+
 function restorePanelWidths() {
+  const root = document.documentElement;
   for (const name of ["--rail-w", "--browser-w"]) {
     const saved = Number(localStorage.getItem(`hmux${name}`));
     if (saved > 0) {
-      document.documentElement.style.setProperty(name, `${saved}px`);
+      wanted[name] = saved;
+      root.style.setProperty(name, `${saved}px`);
+    } else {
+      // Whatever the stylesheet says, so the ceiling has something to compare
+      // against before anything has ever been dragged.
+      wanted[name] =
+        parseFloat(getComputedStyle(root).getPropertyValue(name)) || 0;
     }
   }
 }
@@ -2770,14 +2840,23 @@ function fitPanelsToWindow() {
   const ceiling = Math.max(160, Math.floor(window.innerWidth * MAX_PANEL_SHARE));
   const root = document.documentElement;
   for (const name of ["--rail-w", "--browser-w"]) {
-    const current = parseFloat(getComputedStyle(root).getPropertyValue(name));
-    if (current > ceiling) {
-      root.style.setProperty(name, `${ceiling}px`);
-      // Written back, or the next launch restores the size that did not fit.
-      try {
-        localStorage.setItem(`hmux${name}`, String(ceiling));
-      } catch {}
-    }
+    const want = wanted[name];
+    if (!want) continue;
+    // Clamped for this window, never written back.
+    //
+    // The clamped value used to be saved, which quietly destroyed the width
+    // you had chosen. A window is briefly narrow while it opens, before it is
+    // restored to the size it was last left at, so the ceiling during those
+    // first frames is computed against a window that is not the real one. The
+    // rail was clamped to that, the clamp was persisted, and the next launch
+    // started from the smaller number and clamped it again. It came back a
+    // little narrower every time and there was no way to tell it had happened
+    // except by dragging it out again.
+    //
+    // Remembering the width asked for and applying whatever fits keeps both
+    // promises: the terminal is never squeezed out on a small screen, and the
+    // rail is the width you set it to the moment there is room for it again.
+    root.style.setProperty(name, `${Math.min(want, ceiling)}px`);
   }
 }
 
@@ -2810,6 +2889,7 @@ function makeSplitter(el, varName, opts) {
     const clamped = Math.max(opts.min, Math.min(opts.max, w));
     document.documentElement.style.setProperty(varName, `${clamped}px`);
     try {
+      wanted[varName] = clamped;
       localStorage.setItem(`hmux${varName}`, String(clamped));
     } catch {}
     // Deliberately not refitting the terminal here, and deliberately not
@@ -2948,6 +3028,17 @@ async function main() {
     if (e.ctrlKey && e.shiftKey && (e.key === "L" || e.key === "l")) {
       e.preventDefault();
       openAddressBar();
+    }
+    if (e.key === "F11") {
+      e.preventDefault();
+      // The maximise icon is deliberately left alone. Fullscreen is a
+      // different state from maximised, the window is not maximised on the way
+      // out of it, and a restore glyph on a button that would not restore
+      // anything is worse than no feedback. The resize that follows is what
+      // refits the terminals, and that happens on its own.
+      invoke("window_toggle_fullscreen").catch((err) =>
+        showError("fullscreen", err)
+      );
     }
     if (e.key === "Escape") {
       closeRowMenu();

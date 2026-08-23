@@ -143,6 +143,25 @@ fn window_toggle_maximize(app: tauri::AppHandle) -> Result<bool, String> {
     Ok(!maximized)
 }
 
+/// F11. Returns the state it ended up in.
+///
+/// Fullscreen is not a bigger maximise: it takes the taskbar as well, and this
+/// window has no OS caption to lose, so what it actually buys is the strip at
+/// the bottom of the screen and nothing else being able to sit on top. Worth a
+/// key because the alternative is dragging the window and hiding the taskbar
+/// by hand.
+///
+/// The app's own title bar stays. It carries the only close button there is,
+/// and a fullscreen window with no way out but a keystroke you might not know
+/// is a window people force-quit.
+#[tauri::command]
+fn window_toggle_fullscreen(app: tauri::AppHandle) -> Result<bool, String> {
+    let window = main_window(&app)?;
+    let full = window.is_fullscreen().map_err(|e| e.to_string())?;
+    window.set_fullscreen(!full).map_err(|e| e.to_string())?;
+    Ok(!full)
+}
+
 #[tauri::command]
 fn window_is_maximized(app: tauri::AppHandle) -> Result<bool, String> {
     main_window(&app)?.is_maximized().map_err(|e| e.to_string())
@@ -540,6 +559,7 @@ fn main() {
             open_external,
             window_minimize,
             window_toggle_maximize,
+            window_toggle_fullscreen,
             window_is_maximized,
             window_close,
             window_start_drag,

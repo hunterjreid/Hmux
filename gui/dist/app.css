@@ -1182,7 +1182,14 @@ body {
   transition: opacity var(--med) var(--ease) !important;
 }
 
-.term-host:hover .xterm-scrollable-element > .scrollbar {
+/* And only when there is something above the viewport to go back to.
+ *
+ * xterm reserves the bar whether or not the buffer has scrolled, so a
+ * terminal you have just opened showed a full-height slider on hover: a
+ * control that fills its own track is not telling you where you are, it is
+ * telling you there is nowhere to go. `has-scrollback` is set from
+ * `buffer.baseY`, which is the number of lines that have left the screen. */
+.term-host.has-scrollback:hover .xterm-scrollable-element > .scrollbar {
   opacity: 1 !important;
 }
 
@@ -1232,7 +1239,7 @@ body {
   transition: background-color var(--med) var(--ease);
 }
 
-.term-host:hover .xterm-viewport::-webkit-scrollbar-thumb {
+.term-host.has-scrollback:hover .xterm-viewport::-webkit-scrollbar-thumb {
   background-color: #3a3f47;
 }
 
