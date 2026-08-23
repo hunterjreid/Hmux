@@ -119,6 +119,24 @@ fn account_name() -> String {
 // a command reaches the window it belongs to without depending on what the
 // multiwebview build injects into it.
 
+/// Match the chrome webview to the window it is inside.
+///
+/// The window is asked how big it is rather than the event being believed:
+/// maximising fires several resize events in a burst and they do not all carry
+/// the size the window ended up at.
+fn sync_ui_size(window: &tauri::Window) {
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
+    let Ok(scale) = window.scale_factor() else {
+        return;
+    };
+    let logical = size.to_logical::<f64>(scale);
+    if let Some(ui) = window.get_webview("ui") {
+        let _ = ui.set_size(LogicalSize::new(logical.width, logical.height));
+    }
+}
+
 fn main_window(app: &tauri::AppHandle) -> Result<tauri::Window, String> {
     app.get_window("main")
         .ok_or_else(|| "the main window is gone".to_string())
@@ -159,6 +177,14 @@ fn window_toggle_fullscreen(app: tauri::AppHandle) -> Result<bool, String> {
     let window = main_window(&app)?;
     let full = window.is_fullscreen().map_err(|e| e.to_string())?;
     window.set_fullscreen(!full).map_err(|e| e.to_string())?;
+
+    // Nothing to re-sync here. The chrome webview is built with
+    // `auto_resize`, which is what makes fullscreen work: resizing it by hand
+    // from the window's `Resized` event loses a race on this transition, and a
+    // thread that re-measured a few times afterwards did not win it either.
+    // Measured: with the manual path alone the page reported 1392 in a
+    // 1440-tall window; with `auto_resize` it reports 1440.
+
     Ok(!full)
 }
 
@@ -619,7 +645,31 @@ fn main() {
             // The chrome fills the window; browsers are layered over the region
             // it leaves empty for them.
             window.add_child(
-                WebviewBuilder::new("ui", WebviewUrl::App("index.html".into())),
+                WebviewBuilder::new("ui", WebviewUrl::App("index.html".into()))
+                    // Without this, dragging a row in the rail does nothing.
+                    //
+                    // WebView2 registers an OS drop target for the whole
+                    // surface so that dropping a file on the app can be
+                    // handled natively, and that target consumes the drag
+                    // before the page sees it: `dragstart` fires, then no
+                    // `dragover` and no `drop` ever arrive, so the row is
+                    // picked up and silently put back. Nothing here wants a
+                    // file dropped on it, and reordering the rail is worth
+                    // more than a capability the app does not use.
+                    .disable_drag_drop_handler()
+                    // Let Tauri keep this matched to the window.
+                    //
+                    // It was being resized by hand from the window's `Resized`
+                    // event, and that is a race the app loses on a fullscreen
+                    // transition: the last event arrives before Windows has
+                    // released the taskbar, `inner_size` honestly answers the
+                    // size from a moment ago, and nothing asks again. The
+                    // window was the full height of the screen with a page
+                    // inside it forty-eight pixels short.
+                    //
+                    // Auto-resize is the same job done from inside, where the
+                    // new size is known rather than polled for.
+                    .auto_resize(),
                 LogicalPosition::new(0.0, 0.0),
                 LogicalSize::new(logical.width, logical.height),
             )?;
@@ -648,25 +698,7 @@ fn main() {
                 if !matches!(event, tauri::WindowEvent::Resized(_)) {
                     return;
                 }
-                // The window is asked how big it is, rather than the event
-                // being believed.
-                //
-                // Maximising fires several of these in a burst and they do not
-                // all carry the size the window ended up at — take one at face
-                // value and the chrome is left at a size the window has already
-                // stopped being, which is a strip of empty desktop down the
-                // side of the app with everything drawn into the wrong half.
-                // Asking cannot be stale by the time it is answered.
-                let Ok(size) = resize_handle.inner_size() else {
-                    return;
-                };
-                let Ok(scale) = resize_handle.scale_factor() else {
-                    return;
-                };
-                let logical = size.to_logical::<f64>(scale);
-                if let Some(ui) = resize_handle.get_webview("ui") {
-                    let _ = ui.set_size(LogicalSize::new(logical.width, logical.height));
-                }
+                sync_ui_size(&resize_handle);
             });
 
             // Ask the daemon what everything is doing, on a timer.

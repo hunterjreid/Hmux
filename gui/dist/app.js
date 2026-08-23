@@ -1938,14 +1938,61 @@ const pinned = new Set(
   })()
 );
 
-function togglePinned(id) {
-  if (pinned.has(id)) pinned.delete(id);
-  else pinned.add(id);
+/**
+ * The order you dragged the rail into, by id.
+ *
+ * Only ids that have been moved appear here. Anything else keeps the daemon's
+ * order, which is the order terminals were started, so a rail nobody has
+ * rearranged behaves exactly as it did before.
+ */
+const ORDER_KEY = "hmux.order";
+let railOrder = (() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(ORDER_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter((n) => Number.isInteger(n)) : [];
+  } catch {
+    return [];
+  }
+})();
+
+function saveRailOrder() {
+  try {
+    localStorage.setItem(ORDER_KEY, JSON.stringify(railOrder));
+  } catch {}
+}
+
+/**
+ * Put `id` where `beforeId` currently is, or at the end when dropped past the
+ * last row.
+ *
+ * The list is rebuilt from what is on screen rather than patched, so an order
+ * containing terminals that have since closed cannot drift out of step with
+ * the rail.
+ */
+function moveRow(id, beforeId, visibleIds) {
+  const order = visibleIds.filter((x) => x !== id);
+  const at = beforeId === null ? order.length : order.indexOf(beforeId);
+  order.splice(at < 0 ? order.length : at, 0, id);
+  railOrder = order;
+  saveRailOrder();
+  refresh();
+}
+
+function savePinned() {
   try {
     localStorage.setItem(PINNED_KEY, JSON.stringify([...pinned]));
   } catch {}
+}
+
+function togglePinned(id) {
+  if (pinned.has(id)) pinned.delete(id);
+  else pinned.add(id);
+  savePinned();
   refresh();
 }
+
+/** The row currently being dragged, or null. */
+let draggingId = null;
 
 function openRowMenu(id, x, y) {
   const entry = terminals.get(id);
@@ -2026,14 +2073,22 @@ function renderButtons() {
     ? infos.filter((i) => displayName(i).toLowerCase().includes(needle))
     : infos;
 
-  // Pinned first, and otherwise in the order the daemon lists them.
+  // Pinned first, then whatever order the rail has been dragged into, then
+  // the daemon's own, which is the order the terminals were started in.
   //
-  // A stable sort, so within each group nothing moves: the daemon's order is
-  // the order terminals were started, and a rail that reshuffled itself for
-  // any other reason would cost you the muscle memory of where each one sits.
-  const shown = [...matching].sort(
-    (a, b) => (pinned.has(b.id) ? 1 : 0) - (pinned.has(a.id) ? 1 : 0)
-  );
+  // A stable sort, so anything not covered by the two keys above does not
+  // move: a rail that reshuffled itself for a reason you did not ask for costs
+  // you the muscle memory of where each terminal sits, which is most of what
+  // the rail is for.
+  const rank = (id) => {
+    const at = railOrder.indexOf(id);
+    return at < 0 ? Number.MAX_SAFE_INTEGER : at;
+  };
+  const shown = [...matching].sort((a, b) => {
+    const pin = (pinned.has(b.id) ? 1 : 0) - (pinned.has(a.id) ? 1 : 0);
+    if (pin) return pin;
+    return rank(a.id) - rank(b.id);
+  });
 
   // Rows are updated in place, never rebuilt.
   //
@@ -2078,8 +2133,28 @@ function renderButtons() {
       row = document.createElement("div");
       row.tabIndex = 0;
       row.dataset.id = key;
+      // Dragged by the row itself. A separate grip would be one more thing in
+      // a row whose whole point is that it is a name and nothing else.
+      row.draggable = true;
+
       name = document.createElement("span");
       name.className = "name";
+
+      // The pin sits inside the name, before the text, so it is part of the
+      // label rather than a second column. It is `display: none` until the row
+      // is pinned, which keeps the markup the same for every row and means
+      // pinning does not rebuild anything.
+      const pin = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      pin.setAttribute("class", "pin");
+      const pinUse = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "use"
+      );
+      pinUse.setAttribute("href", "#i-pin");
+      pin.appendChild(pinUse);
+      name.appendChild(pin);
+      name.appendChild(document.createElement("span"));
+
       row.append(name);
       existing.set(key, row);
     }
@@ -2090,7 +2165,9 @@ function renderButtons() {
       (pinned.has(info.id) ? " pinned" : "");
 
     const label = displayName(info);
-    if (name.textContent !== label) name.textContent = label;
+    // The last child, because the first is the pin.
+    const text = name.lastElementChild || name;
+    if (text.textContent !== label) text.textContent = label;
 
     // Rebound every pass because they close over `info`, which is a new object
     // each time even when the row it describes is the same one.
@@ -2118,6 +2195,52 @@ function renderButtons() {
         e.preventDefault();
         beginRename(info.id, name);
       }
+    };
+    row.ondragstart = (e) => {
+      draggingId = info.id;
+      row.classList.add("dragging-row");
+      // Firefox refuses to start a drag without data on the transfer.
+      try {
+        e.dataTransfer.setData("text/plain", key);
+        e.dataTransfer.effectAllowed = "move";
+      } catch {}
+    };
+    row.ondragend = () => {
+      draggingId = null;
+      for (const el of els.list.children) {
+        el.classList.remove("dragging-row", "drop-before");
+      }
+    };
+    row.ondragover = (e) => {
+      if (draggingId === null || draggingId === info.id) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      // Above or below the midpoint decides which side of this row the drop
+      // lands on, which is the only thing that makes dropping onto the last
+      // row able to mean "after it".
+      const box = row.getBoundingClientRect();
+      const after = e.clientY > box.top + box.height / 2;
+      for (const el of els.list.children) el.classList.remove("drop-before");
+      const target = after ? row.nextElementSibling : row;
+      if (target) target.classList.add("drop-before");
+      else row.classList.add("drop-after");
+    };
+    row.ondrop = (e) => {
+      if (draggingId === null || draggingId === info.id) return;
+      e.preventDefault();
+      const box = row.getBoundingClientRect();
+      const after = e.clientY > box.top + box.height / 2;
+      const ids = shown.map((i) => i.id);
+      const at = ids.indexOf(info.id);
+      const beforeId = after ? (ids[at + 1] ?? null) : info.id;
+      // Pinned and unpinned are separate groups in the sort, so a row dragged
+      // across that line has to change group or it would spring back.
+      if (pinned.has(info.id) !== pinned.has(draggingId)) {
+        if (pinned.has(info.id)) pinned.add(draggingId);
+        else pinned.delete(draggingId);
+        savePinned();
+      }
+      moveRow(draggingId, beforeId, ids);
     };
     row.oncontextmenu = (e) => {
       e.preventDefault();
@@ -3034,11 +3157,33 @@ async function main() {
       // The maximise icon is deliberately left alone. Fullscreen is a
       // different state from maximised, the window is not maximised on the way
       // out of it, and a restore glyph on a button that would not restore
-      // anything is worse than no feedback. The resize that follows is what
-      // refits the terminals, and that happens on its own.
-      invoke("window_toggle_fullscreen").catch((err) =>
-        showError("fullscreen", err)
-      );
+      // anything is worse than no feedback.
+      invoke("window_toggle_fullscreen")
+        .then(() => {
+          // Refit explicitly, and more than once.
+          //
+          // Going fullscreen gains exactly the height of the taskbar, about
+          // fifty pixels, which is two or three rows. The terminal kept the
+          // row count it had while merely maximised and left that strip of
+          // background below the last line, which is the whole of what "it
+          // does not fill the bottom" was.
+          //
+          // Why the observer did not catch it: the window is resized by the OS
+          // outside any layout the page is doing, and the webview's own box
+          // catches up a frame or two later. One callback fires against a host
+          // that has not moved yet. Asking again after the next frame and
+          // again once the transition is over costs two measurements that
+          // usually change nothing.
+          const refit = () => {
+            if (activeId !== null) syncSize(activeId);
+            scheduleBounds();
+          };
+          requestAnimationFrame(() => requestAnimationFrame(refit));
+          setTimeout(refit, 120);
+          setTimeout(refit, 400);
+
+        })
+        .catch((err) => showError("fullscreen", err));
     }
     if (e.key === "Escape") {
       closeRowMenu();

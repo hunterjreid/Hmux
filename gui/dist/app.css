@@ -175,7 +175,14 @@ body {
   grid-template-columns:
     minmax(0, var(--rail-w)) 4px minmax(220px, 1fr) 4px minmax(0, var(--browser-w));
   grid-template-rows: var(--tb-h) 1fr;
-  height: 100vh;
+  /* The viewport's real height, not `100vh`.
+   *
+   * `vh` is resolved against the viewport the webview thinks it has, and going
+   * fullscreen changes the window before it changes that: the app kept the
+   * height it had when it was merely maximised and left a strip of desktop
+   * along the bottom. `html` and `body` are already 100%, so following them
+   * measures the box that actually exists. */
+  height: 100%;
   transition: grid-template-columns var(--slide) var(--slide-ease);
 }
 
@@ -351,27 +358,12 @@ body {
   padding: 0 6px 0 14px;
 }
 
-.tb-brand {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+/* The wordmark and its icon are gone; see index.html. What is left in this
+   section is drag region, so it has to keep filling the space or the bar
+   becomes a strip you cannot pick the window up by. */
+.tb-rail::after {
+  content: "";
   flex: 1;
-  min-width: 0;
-  font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-/* Not `.ico`: that paints in currentColor, and the wordmark beside this is
-   deliberately the dimmest text in the window. The mark keeps its own colour
-   so the corner has one thing in it that is not grey. */
-.tb-mark {
-  width: 16px;
-  height: 16px;
-  flex: none;
-  pointer-events: none;
 }
 
 .tb-main {
@@ -668,32 +660,59 @@ body {
   color: var(--text);
 }
 
-/* Pinned, marked on the leading edge rather than with an icon.
+/* Pinned, said with a pin.
  *
- * A pin glyph would want the right-hand gutter, which is the spinner's and is
- * held shut on every row that is not working — and a name is already clipped
- * by whatever sits beside it. A bar on the edge the rows align to costs no
- * width at all and reads down a column at a glance, which is the only place
- * this information is ever used.
+ * This was a coloured bar down the leading edge, on the grounds that a glyph
+ * would want the right-hand gutter and that gutter belongs to the spinner. The
+ * pin does not have to go there: it goes inside the label, in front of the
+ * text, where it is read as part of the name rather than as a second column.
+ * A bar was also a colour you had to learn, and the accent is used elsewhere.
  *
- * On the padding rather than as a border, so the row's box is unchanged and a
- * pinned row does not sit a pixel off from the rest. */
-.term-btn.pinned {
-  background-image: linear-gradient(
-    to right,
-    var(--accent) 0 2px,
-    transparent 2px
-  );
-  background-repeat: no-repeat;
+ * Sized in `em` so it tracks the rail's own font like everything else here. */
+.term-btn .pin {
+  display: none;
+  width: 0.85em;
+  height: 0.85em;
+  flex: none;
+  margin-right: 0.42em;
+  color: var(--faint);
+  transform: translateY(0.04em);
 }
 
-/* The rail can be flipped, and the leading edge goes with it. */
-.app.mirrored .term-btn.pinned {
-  background-image: linear-gradient(
-    to left,
-    var(--accent) 0 2px,
-    transparent 2px
-  );
+.term-btn.pinned .pin {
+  display: inline-block;
+}
+
+.term-btn.pinned .name {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* The label still has to be the thing that ellipsises, not the row. */
+.term-btn.pinned .name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- dragging a row ---------- */
+
+/* The row being carried. Left in place at low opacity rather than removed, so
+   the list does not reflow under the pointer while you are aiming at it. */
+.term-btn.dragging-row {
+  opacity: 0.4;
+}
+
+/* Where it would land. A line between rows rather than a highlight on one,
+   because the question being answered is "between which two", and highlighting
+   a row answers "onto which". */
+.term-btn.drop-before {
+  box-shadow: inset 0 2px 0 -0.5px var(--accent);
+}
+
+.term-btn.drop-after {
+  box-shadow: inset 0 -2px 0 -0.5px var(--accent);
 }
 
 .term-btn .name {
@@ -756,27 +775,88 @@ body {
   background: currentColor;
 }
 
-/* Actively producing output — the only thing here that moves.
-
-   Opacity rather than size. A dot that grows moves the two beside it a
-   fraction, and three of those in a rail is a row that never sits still. */
+/* Actively producing output, the only thing here that moves.
+ *
+ * One long sequence rather than ten separate spinners.
+ *
+ * Ten variants picked one per start was a different animation every time a
+ * terminal woke up, which meant the mark never settled into something you
+ * could stop noticing. Run end to end as a single loop it becomes one
+ * behaviour with movements in it: the dots hop, swell, fall, stretch and
+ * relay, then rest. You read "still going" from any point in it without
+ * having to recognise which of ten you are looking at.
+ *
+ * The rest at the end matters as much as the movement. Nine seconds of
+ * continuous motion in the corner of a rail is a thing you end up covering
+ * with your hand; a beat of stillness is what makes the next movement read.
+ *
+ * Orbit is not in it. Spinning the row turns the three dots into a propeller,
+ * and at this size that is the one shape here that stops looking like dots.
+ */
 .state.working {
   color: var(--busy);
 }
 
 .state.working i {
-  opacity: 0.22;
-  animation: dot-pulse 1.3s ease-in-out infinite;
+  animation: dot-run 9s cubic-bezier(0.32, 0.72, 0, 1) infinite;
 }
 
-/* Spaced so the brightness travels along the row rather than the three of them
-   breathing together. */
+/* Staggered so each movement travels along the row rather than the three of
+   them doing it in unison. */
 .state.working i:nth-child(2) {
-  animation-delay: 0.18s;
+  animation-delay: 0.15s;
 }
 
 .state.working i:nth-child(3) {
-  animation-delay: 0.36s;
+  animation-delay: 0.3s;
+}
+
+/*
+ * One transform property throughout, so every stop interpolates against the
+ * same function list. Mixing `scale` and `scaleX` between keyframes makes the
+ * browser drop back to discrete steps and the whole thing snaps.
+ */
+@keyframes dot-run {
+  /* hop */
+  0%   { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
+  4%   { transform: translateY(-0.3em) scale(1, 1);   opacity: 1; }
+  9%   { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
+
+  /* swell */
+  14%  { transform: translateY(0) scale(1.45, 1.45);  opacity: 1; }
+  19%  { transform: translateY(0) scale(0.6, 0.6);    opacity: 0.3; }
+  23%  { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
+
+  /* fall */
+  28%  { transform: translateY(0.28em) scale(1, 1);   opacity: 1; }
+  33%  { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
+
+  /* stretch */
+  39%  { transform: translateY(0) scale(2.4, 1);      opacity: 1; }
+  45%  { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
+
+  /* relay: the stagger does the work, each dot lights in turn */
+  52%  { transform: translateY(0) scale(1.1, 1.1);    opacity: 1; }
+  58%  { transform: translateY(0) scale(1, 1);        opacity: 0.16; }
+
+  /* a smaller hop, so the loop does not end on its loudest move */
+  65%  { transform: translateY(-0.16em) scale(1.15, 1.15); opacity: 1; }
+  71%  { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
+
+  /* rest */
+  78%  { transform: translateY(0) scale(1, 1);        opacity: 0.55; }
+  100% { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
+}
+
+/* Kept still for anyone who has asked the system not to animate things. A
+   spinner is the one thing here that exists to move, so it stays visible and
+   stops rather than disappearing. */
+@media (prefers-reduced-motion: reduce) {
+  .state.working i {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* The shell is gone. One dot, standing still: a state, not a process. */

@@ -15,11 +15,19 @@
            colours as the window icon. It carries its own strokes rather than
            taking currentColor, because everything else on that bar is chrome
            and this is the one thing that is not. -->
+      <!-- The app's own tile, drawn rather than linked. The icon file is a
+           grained raster and none of that grain survives being painted at
+           sixteen pixels, so the mark here is the same three shapes the tile is
+           built from: dark square, white H, magenta dot. Redrawn means it stays
+           crisp at any size and costs no request. -->
       <symbol id="i-mark" viewBox="0 0 24 24">
-        <path d="M4.75 5.75 11.25 12l-6.5 6.25" fill="none" stroke="#35c47c"
-              stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
-        <path d="M13.75 18.25h5.5" fill="none" stroke="#4a90f7"
-              stroke-width="3" stroke-linecap="round" />
+        <rect width="24" height="24" rx="5.5" fill="#141418" />
+        <g fill="none" stroke="#fff" stroke-width="2.5">
+          <path d="M8.2 6.9V17.3" />
+          <path d="M14.5 6.9V17.3" />
+          <path d="M8.2 12.1H14.5" />
+        </g>
+        <circle cx="19.2" cy="6.5" r="2.05" fill="#e619ff" />
       </symbol>
       <symbol id="i-plus" viewBox="0 0 14 14">
         <path d="M7 2.5v9M2.5 7h9" />
@@ -93,6 +101,16 @@
         <path d="M5.4 6.9 8 9.4l2.6-2.5" />
         <path d="M3.2 11.4v1.2a.9.9 0 0 0 .9.9h7.8a.9.9 0 0 0 .9-.9v-1.2" />
       </symbol>
+      <!-- A pushpin, the shape everyone already reads as pinned. Two attempts
+           preceded it: a three-quarter drawing pin whose head, shaft and point
+           closed into one blob at this size, and a circle over a line that
+           read as a balloon. Its own stroke width, being on a 24-unit grid. -->
+      <symbol id="i-pin" viewBox="0 0 24 24" stroke-width="2">
+        <path d="M12 17v5" />
+        <path
+          d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"
+        />
+      </symbol>
       <symbol id="i-back" viewBox="0 0 16 16">
         <path d="M9.6 3.8 5.4 8l4.2 4.2" />
       </symbol>
@@ -112,10 +130,10 @@
            active terminal's name. -->
       <header class="titlebar" id="titlebar">
         <div class="tb-rail">
-          <span class="tb-brand" data-drag>
-            <svg class="tb-mark" aria-hidden="true"><use href="#i-mark" /></svg>
-            <span data-drag>hmux</span>
-          </span>
+          <!-- No wordmark. You know what application you are in: it is the one
+               you are typing into, and it does not need to say its own name at
+               you all day. The space it leaves is drag region, which the bar
+               needed more than it needed a logo. -->
           <!-- The page beside the terminal, opened and shut from the corner.
                Up here rather than at the far end of the bar because it is the
                one piece of chrome you reach for constantly, and the corner is
