@@ -751,10 +751,10 @@ const THEME = {
   // editor.background: everything that is chrome keeps the theme's greys, and
   // the terminal sitting under all of them is what makes it read as a hole in
   // the window rather than one more panel.
-  background: "#0E0E0E",
+  background: "#060606",
   foreground: "#C5C8C6",
   cursor: "#C5C8C6",
-  cursorAccent: "#0E0E0E",
+  cursorAccent: "#060606",
   selectionBackground: "#676B7180",
   black: "#1E1E1E",
   red: "#C4265E",
@@ -1278,8 +1278,49 @@ function syncSize(id) {
 }
 
 /** Fit one terminal to the box, and tell its pty once the size holds still. */
+/**
+ * Below this the box is not a terminal, it is a box mid-layout.
+ *
+ * The grid gives the terminal a floor of 220px and the window has a minimum
+ * size, so a host narrower than this is never a real state anybody is looking
+ * at — it is the width during a collapse, a slide, or the moment before the
+ * columns are first resolved.
+ */
+const FIT_FLOOR_PX = 140;
+
 function fitTerminal(id, entry) {
   if (!entry || entry.view.offsetParent === null) return;
+
+  // Never fit to a box that is not really there yet.
+  //
+  // A fit is destructive in a way that reading a size is not: it writes a
+  // column count into the terminal and reflows the whole scrollback to match,
+  // and nothing afterwards knows the number was nonsense. Measuring the host
+  // at a few pixels — which happens while a panel is collapsing, and happened
+  // on startup before the columns had resolved — put the terminal at three
+  // columns and left it there, wrapping every line into a ribbon down the side
+  // of an empty pane. Skipping is safe because anything that changes the box
+  // fires the observer again once it has a real width.
+  const box = els.host;
+  if (box.clientWidth < FIT_FLOOR_PX || box.clientHeight < 40) return;
+
+  // Ask what it would do before letting it do it.
+  //
+  // `fit` measures and applies in one step, and applying is the destructive
+  // half: it writes the column count and reflows the entire scrollback to
+  // match, and nothing downstream can tell that the number was nonsense. The
+  // addon divides the box by a cell size it measures from the DOM, and that
+  // measurement comes back wrong if it is taken before the font has loaded —
+  // a cell far wider than the real one, and a column count in single digits.
+  // Reading the proposal first means a bad measurement costs nothing.
+  let proposed = null;
+  try {
+    proposed = entry.fit.proposeDimensions();
+  } catch {
+    return;
+  }
+  if (!proposed || !proposed.cols || !proposed.rows) return;
+  if (proposed.cols < 10 && box.clientWidth > 400) return;
 
   let fitted = true;
   preservingView(entry, () => {
@@ -3123,6 +3164,24 @@ async function main() {
     layoutReady = true;
     pushBrowserBounds(true);
   }, STARTUP_SETTLE_MS + 200);
+
+  // Fit again once the terminal font has actually loaded.
+  //
+  // Every column count here is the box divided by the width of a cell, and the
+  // cell is measured from the DOM — so a fit that happens before the font is
+  // ready measures a fallback face, or nothing at all, and lands on a number
+  // that has no relationship to what is on screen. It is not a small error
+  // either: it produced a three-column terminal in a window nineteen hundred
+  // pixels wide.
+  //
+  // `fonts.ready` is the event for exactly this, and after it the measurement
+  // is the real one. Nothing else triggers a refit at that moment, because
+  // loading a font does not resize anything the observer is watching.
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => {
+      if (activeId !== null) syncSize(activeId);
+    });
+  }
 
   try {
     maximized = await invoke("window_is_maximized");

@@ -98,7 +98,7 @@
 
      It is also what shows through a background image, since the picture is a
      faded layer over this rather than something painted onto it. */
-  --term-bg: #0e0e0e;
+  --term-bg: #060606;
 
   /* An image behind the terminal, when there is one. Empty by default, so
      `background-image: var(--term-image)` resolves to nothing and the flat
