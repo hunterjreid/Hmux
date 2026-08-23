@@ -33,17 +33,18 @@
            as a loading indicator at sixteen pixels; the lobed outline is the
            shape people already know means settings. -->
       <!--
-        Its own stroke width, because it is the only symbol here on a 24-unit
-        grid rather than a 16-unit one. `.ico` sets 1.4 for the whole set,
-        which is about 1.2 device pixels at the 16 the others use and only 0.8
-        at 24 — so this came out visibly thinner and greyer than every icon
-        beside it, and the lobes turned to mush. 2 at this scale lands on the
-        same weight, which is also Lucide's own default for the grid it drew
-        this on.
+        Cryptoflip's own settings gear, off the header there rather than out of
+        an icon set. Solid, not stroked, and it carries its own `fill` and
+        `stroke` because `.ico` sets the opposite for everything else here.
+
+        The outlined gear that was here first was the wrong icon twice over:
+        the wrong shape, and drawn as a hairline on a 24-unit grid while every
+        other symbol is a 16-unit one, so it rendered at two thirds the weight
+        of its neighbours and the teeth turned to mush. A filled glyph has no
+        stroke weight to get wrong and reads at any size.
       -->
-      <symbol id="i-gear" viewBox="0 0 24 24">
-        <circle cx="12" cy="12" r="3" stroke-width="2" />
-        <path stroke-width="2" d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" />
+      <symbol id="i-gear" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+        <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
       </symbol>
       <!-- A divider with the two halves leaving it in opposite directions:
            what the button does, rather than a left-right arrow, which would
