@@ -172,20 +172,47 @@ fn window_toggle_maximize(app: tauri::AppHandle) -> Result<bool, String> {
 /// The app's own title bar stays. It carries the only close button there is,
 /// and a fullscreen window with no way out but a keystroke you might not know
 /// is a window people force-quit.
+/// Whether the window was maximised when fullscreen was entered, so leaving
+/// fullscreen puts it back rather than dropping it to some restored size the
+/// user last saw an hour ago.
+static WAS_MAXIMIZED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[tauri::command]
 fn window_toggle_fullscreen(app: tauri::AppHandle) -> Result<bool, String> {
+    use std::sync::atomic::Ordering;
+
     let window = main_window(&app)?;
     let full = window.is_fullscreen().map_err(|e| e.to_string())?;
-    window.set_fullscreen(!full).map_err(|e| e.to_string())?;
 
-    // Nothing to re-sync here. The chrome webview is built with
-    // `auto_resize`, which is what makes fullscreen work: resizing it by hand
-    // from the window's `Resized` event loses a race on this transition, and a
-    // thread that re-measured a few times afterwards did not win it either.
-    // Measured: with the manual path alone the page reported 1392 in a
-    // 1440-tall window; with `auto_resize` it reports 1440.
+    if full {
+        window.set_fullscreen(false).map_err(|e| e.to_string())?;
+        if WAS_MAXIMIZED.swap(false, Ordering::Relaxed) {
+            window.maximize().map_err(|e| e.to_string())?;
+        }
+        return Ok(false);
+    }
 
-    Ok(!full)
+    // Drop out of maximised before going fullscreen.
+    //
+    // Fullscreen from a maximised window is the case that did not work. The
+    // window is already the size of the work area, and Windows keeps the
+    // maximised state while making it the size of the screen, which does not
+    // reliably produce the resize the webview follows. So the page stayed at
+    // the work area's height and left the taskbar's worth of black along the
+    // bottom, but only when you were maximised first, which is why it looked
+    // fixed and then did not.
+    //
+    // Restoring first makes it an ordinary window growing to fullscreen, which
+    // is the path that works. What it costs is one frame at the restored size.
+    let maximized = window.is_maximized().map_err(|e| e.to_string())?;
+    WAS_MAXIMIZED.store(maximized, Ordering::Relaxed);
+    if maximized {
+        window.unmaximize().map_err(|e| e.to_string())?;
+    }
+    window.set_fullscreen(true).map_err(|e| e.to_string())?;
+
+    Ok(true)
 }
 
 #[tauri::command]

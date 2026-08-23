@@ -1742,6 +1742,9 @@ async function newTerminal(shell = null) {
   return id;
 }
 
+/** The rail's current order, set by `refresh`. */
+let railIds = [];
+
 async function closeTerminal(id) {
   await invoke("close_terminal", { id }).catch(console.error);
   const entry = terminals.get(id);
@@ -1752,8 +1755,21 @@ async function closeTerminal(id) {
   }
   if (activeId === id) {
     activeId = null;
-    const next = terminals.keys().next();
-    if (!next.done) await selectTerminal(next.value);
+    // Hand over to the neighbour in the rail: the one below, or the one above
+    // when the last row was closed.
+    //
+    // It used to take the first entry in the terminals map, which is creation
+    // order, so closing anything threw you to the oldest terminal you had open
+    // regardless of where you were. Closing three in a row meant three jumps
+    // to somewhere you were not.
+    const at = railIds.indexOf(id);
+    const below = at < 0 ? undefined : railIds.slice(at + 1).find((x) => terminals.has(x));
+    const above =
+      at <= 0
+        ? undefined
+        : [...railIds.slice(0, at)].reverse().find((x) => terminals.has(x));
+    const next = below ?? above ?? terminals.keys().next().value;
+    if (next !== undefined) await selectTerminal(next);
   }
   // Re-park browsers: with the last terminal gone there is nothing to show,
   // and its webview must not be left hanging over the chrome.
@@ -1873,6 +1889,20 @@ function wantedState(info) {
  * loudest exactly when it meant least. What is worth a mark is a terminal
  * doing something, which the spinner already says.
  */
+/**
+ * The spinner.
+ *
+ * Twenty of these were built and looked at side by side, and jitter is the one
+ * that won. It is also the odd one out: every other variant is a smooth eased
+ * curve, and this is a linear stagger that never quite settles, which is what
+ * makes it read as work happening rather than as an ornament keeping time.
+ *
+ * The other nineteen are still in `app.css` and still work. Putting any of them
+ * back is one word here; making it random again is restoring the picker this
+ * replaced.
+ */
+const SPINNER = "v-jitter";
+
 function updateRightSlot(row, info) {
   const wanted = wantedState(info);
   const current = row.querySelector(".state");
@@ -1889,6 +1919,7 @@ function updateRightSlot(row, info) {
 
   const el = document.createElement("span");
   el.className = `state ${wanted}`;
+  if (wanted === "working") el.classList.add(SPINNER);
   el.dataset.state = wanted;
   // Three for work in progress, which is what makes it read as a rhythm rather
   // than as a thing that is simply on. One for a shell that has exited, which
@@ -2089,6 +2120,10 @@ function renderButtons() {
     if (pin) return pin;
     return rank(a.id) - rank(b.id);
   });
+
+  // Kept so closing a terminal can hand over to its neighbour rather than to
+  // whichever one happens to be oldest; see `closeTerminal`.
+  railIds = shown.map((i) => i.id);
 
   // Rows are updated in place, never rebuilt.
   //

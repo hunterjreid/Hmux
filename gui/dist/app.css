@@ -777,81 +777,158 @@ body {
 
 /* Actively producing output, the only thing here that moves.
  *
- * One long sequence rather than ten separate spinners.
+ * Twenty animations, one picked at random each time a terminal starts working.
  *
- * Ten variants picked one per start was a different animation every time a
- * terminal woke up, which meant the mark never settled into something you
- * could stop noticing. Run end to end as a single loop it becomes one
- * behaviour with movements in it: the dots hop, swell, fall, stretch and
- * relay, then rest. You read "still going" from any point in it without
- * having to recognise which of ten you are looking at.
+ * This went one-per-start, then a single merged loop, then back. The merged
+ * loop was calmer and also duller: the whole point of the mark is that it
+ * catches you when something wakes up, and a mark that always does the same
+ * thing stops being noticed on about the second day. Twenty is enough that you
+ * do not learn them.
  *
- * The rest at the end matters as much as the movement. Nine seconds of
- * continuous motion in the corner of a rail is a thing you end up covering
- * with your hand; a beat of stillness is what makes the next movement read.
- *
- * Orbit is not in it. Spinning the row turns the three dots into a propeller,
- * and at this size that is the one shape here that stops looking like dots.
+ * All of them are the same three dots in the same row, so the gutter never
+ * changes size, and none moves a dot far enough to touch its neighbour.
+ * Container-level variants animate `.state`; the rest animate the dots with a
+ * stagger, which is what makes the movement travel.
  */
 .state.working {
   color: var(--busy);
 }
 
 .state.working i {
-  animation: dot-run 9s cubic-bezier(0.32, 0.72, 0, 1) infinite;
+  animation-duration: 1.05s;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
 }
 
-/* Staggered so each movement travels along the row rather than the three of
-   them doing it in unison. */
-.state.working i:nth-child(2) {
-  animation-delay: 0.15s;
+.state.working i:nth-child(2) { animation-delay: 0.14s; }
+.state.working i:nth-child(3) { animation-delay: 0.28s; }
+
+/* ---- 1-14: the dots move independently ---- */
+
+.state.working.v-fade i    { opacity: 0.22; animation-name: k-fade; animation-duration: 1.3s; }
+.state.working.v-fade i:nth-child(2) { animation-delay: 0.18s; }
+.state.working.v-fade i:nth-child(3) { animation-delay: 0.36s; }
+
+.state.working.v-bounce i  { animation-name: k-bounce; }
+.state.working.v-drop i    { animation-name: k-drop; }
+.state.working.v-scale i   { animation-name: k-scale; }
+.state.working.v-stretch i { animation-name: k-stretch; }
+.state.working.v-squash i  { animation-name: k-squash; }
+.state.working.v-pop i     { animation-name: k-pop; animation-timing-function: cubic-bezier(0.34, 1.8, 0.64, 1); }
+.state.working.v-wave i    { animation-name: k-wave; animation-duration: 1.4s; }
+.state.working.v-jitter i  { animation-name: k-jitter; animation-duration: 0.7s; animation-timing-function: linear; }
+.state.working.v-march i   { animation-name: k-march; }
+.state.working.v-tilt i    { animation-name: k-tilt; }
+
+.state.working.v-scale-mid i { animation-name: k-scale; }
+.state.working.v-scale-mid i:nth-child(1),
+.state.working.v-scale-mid i:nth-child(3) { animation-delay: 0.19s; }
+.state.working.v-scale-mid i:nth-child(2) { animation-delay: 0s; }
+
+.state.working.v-relay i   { opacity: 0.18; animation-name: k-relay; animation-duration: 1.2s; }
+.state.working.v-relay i:nth-child(2) { animation-delay: 0.4s; }
+.state.working.v-relay i:nth-child(3) { animation-delay: 0.8s; }
+
+.state.working.v-cascade i { animation-name: k-cascade; animation-duration: 1.5s; }
+.state.working.v-cascade i:nth-child(2) { animation-delay: 0.22s; }
+.state.working.v-cascade i:nth-child(3) { animation-delay: 0.44s; }
+
+/* ---- 15-20: all three together, or the trio as one shape ---- */
+
+.state.working.v-blink i   { animation-name: k-fade; animation-duration: 0.85s; animation-delay: 0s !important; }
+.state.working.v-breathe i { animation-name: k-breathe; animation-duration: 2.2s; animation-delay: 0s !important; }
+.state.working.v-throb i   { animation-name: k-throb; animation-duration: 1s; animation-delay: 0s !important; }
+
+.state.working.v-sway      { animation: k-sway 1.2s ease-in-out infinite; }
+.state.working.v-sway i    { opacity: 0.8; animation: none; }
+
+.state.working.v-pendulum  { animation: k-pendulum 1.5s ease-in-out infinite; }
+.state.working.v-pendulum i { opacity: 0.8; animation: none; }
+
+.state.working.v-lift      { animation: k-lift 1.4s ease-in-out infinite; }
+.state.working.v-lift i    { opacity: 0.85; animation: none; }
+
+@keyframes k-fade {
+  0%, 70%, 100% { opacity: 0.22; }
+  35% { opacity: 1; }
 }
-
-.state.working i:nth-child(3) {
-  animation-delay: 0.3s;
+@keyframes k-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.45; }
+  30% { transform: translateY(-0.3em); opacity: 1; }
 }
-
-/*
- * One transform property throughout, so every stop interpolates against the
- * same function list. Mixing `scale` and `scaleX` between keyframes makes the
- * browser drop back to discrete steps and the whole thing snaps.
- */
-@keyframes dot-run {
-  /* hop */
-  0%   { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
-  4%   { transform: translateY(-0.3em) scale(1, 1);   opacity: 1; }
-  9%   { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
-
-  /* swell */
-  14%  { transform: translateY(0) scale(1.45, 1.45);  opacity: 1; }
-  19%  { transform: translateY(0) scale(0.6, 0.6);    opacity: 0.3; }
-  23%  { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
-
-  /* fall */
-  28%  { transform: translateY(0.28em) scale(1, 1);   opacity: 1; }
-  33%  { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
-
-  /* stretch */
-  39%  { transform: translateY(0) scale(2.4, 1);      opacity: 1; }
-  45%  { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
-
-  /* relay: the stagger does the work, each dot lights in turn */
-  52%  { transform: translateY(0) scale(1.1, 1.1);    opacity: 1; }
-  58%  { transform: translateY(0) scale(1, 1);        opacity: 0.16; }
-
-  /* a smaller hop, so the loop does not end on its loudest move */
-  65%  { transform: translateY(-0.16em) scale(1.15, 1.15); opacity: 1; }
-  71%  { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
-
-  /* rest */
-  78%  { transform: translateY(0) scale(1, 1);        opacity: 0.55; }
-  100% { transform: translateY(0) scale(1, 1);        opacity: 0.4; }
+@keyframes k-drop {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.45; }
+  30% { transform: translateY(0.3em); opacity: 1; }
+}
+@keyframes k-scale {
+  0%, 65%, 100% { transform: scale(0.6); opacity: 0.35; }
+  32% { transform: scale(1.35); opacity: 1; }
+}
+@keyframes k-stretch {
+  0%, 65%, 100% { transform: scale(1, 1); opacity: 0.4; }
+  32% { transform: scale(2.4, 1); opacity: 1; }
+}
+@keyframes k-squash {
+  0%, 65%, 100% { transform: scale(1, 1); opacity: 0.4; }
+  32% { transform: scale(1, 2.4); opacity: 1; }
+}
+@keyframes k-pop {
+  0%, 70%, 100% { transform: scale(0.7); opacity: 0.35; }
+  30% { transform: scale(1.5); opacity: 1; }
+}
+@keyframes k-wave {
+  0%, 100% { transform: translateY(0.2em); opacity: 0.4; }
+  50% { transform: translateY(-0.2em); opacity: 1; }
+}
+@keyframes k-jitter {
+  0%, 100% { transform: translate(0, 0); opacity: 0.9; }
+  25% { transform: translate(0.07em, -0.07em); }
+  50% { transform: translate(-0.06em, 0.06em); opacity: 0.5; }
+  75% { transform: translate(0.05em, 0.05em); }
+}
+@keyframes k-march {
+  0%, 100% { transform: translateX(-0.16em); opacity: 0.45; }
+  50% { transform: translateX(0.16em); opacity: 1; }
+}
+@keyframes k-tilt {
+  0%, 65%, 100% { transform: skewX(0deg) scale(1); opacity: 0.45; }
+  32% { transform: skewX(-28deg) scale(1.15); opacity: 1; }
+}
+@keyframes k-relay {
+  0%, 22%, 100% { opacity: 0.18; }
+  8% { opacity: 1; }
+}
+@keyframes k-cascade {
+  0%, 55%, 100% { transform: translateY(-0.26em); opacity: 0; }
+  18% { transform: translateY(0); opacity: 1; }
+  40% { transform: translateY(0.26em); opacity: 0; }
+}
+@keyframes k-breathe {
+  0%, 100% { transform: scale(0.75); opacity: 0.4; }
+  50% { transform: scale(1.25); opacity: 1; }
+}
+@keyframes k-throb {
+  0%, 100% { transform: scale(1); opacity: 0.35; }
+  40% { transform: scale(1.3); opacity: 1; }
+}
+@keyframes k-sway {
+  0%, 100% { transform: translateX(-0.16em); }
+  50% { transform: translateX(0.16em); }
+}
+@keyframes k-pendulum {
+  0%, 100% { transform: rotate(-16deg); }
+  50% { transform: rotate(16deg); }
+}
+@keyframes k-lift {
+  0%, 100% { transform: translateY(0.14em) scale(0.94); }
+  50% { transform: translateY(-0.14em) scale(1.06); }
 }
 
 /* Kept still for anyone who has asked the system not to animate things. A
    spinner is the one thing here that exists to move, so it stays visible and
    stops rather than disappearing. */
 @media (prefers-reduced-motion: reduce) {
+  .state.working,
   .state.working i {
     animation: none !important;
     opacity: 1;
