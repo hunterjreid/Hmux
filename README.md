@@ -1,7 +1,33 @@
-# hmux
+<h1 align="center">hmux</h1>
 
-Terminals that keep running whether or not you're looking at them, in two front
-ends: a GUI app, and a console-only version.
+<p align="center">
+  <strong>Hunter's Terminal Multiplexer.</strong><br />
+  Terminals that keep running whether or not you're looking at them.
+</p>
+
+<p align="center">
+  <a href="https://hmux.hunterjreid.com/">hmux.hunterjreid.com</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/hunterjreid/hmux/releases/latest">Releases</a>
+  &nbsp;·&nbsp;
+  <a href="#how-it-works">How it works</a>
+</p>
+
+<p align="center">
+  <img alt="Windows 10 1809+" src="https://img.shields.io/badge/Windows-10%201809%2B-0a0a0d?style=flat-square&labelColor=0a0a0d&color=e619ff" />
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-2024-0a0a0d?style=flat-square&labelColor=0a0a0d&color=ff4db8" />
+  <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-0a0a0d?style=flat-square&labelColor=0a0a0d&color=ff1a88" />
+</p>
+
+---
+
+The shells do not belong to the window. They belong to a daemon with no window
+of its own, so closing hmux closes a view onto them rather than the things
+themselves. A build you started and then quit the window on is still building
+when you come back.
+
+Two front ends share that: a GUI app with a browser beside every terminal, and
+a console-only version that runs inside the terminal you are already in.
 
 ## Install
 
@@ -14,7 +40,7 @@ a Start menu entry. Per-user, so it never asks for administrator rights, and
 uninstalling is deleting that folder.
 
 Run it again later and it updates in place. It will not do that while a window
-is open — but it does not mind the daemon running, because your terminals are
+is open, but it does not mind the daemon running, because your terminals are
 in it. Windows refuses to overwrite a running program and allows renaming one,
 so the running daemon is moved aside and keeps going from the moved file while
 its replacement takes the name.
@@ -24,7 +50,7 @@ release on startup and every six hours, downloads it in the background, and
 then offers a restart. Taking it costs you the window for about a second: the
 terminals are the daemon's and are still there, mid-command, when it comes
 back. The new daemon is put in place but deliberately not started, so an update
-never interrupts what is running — it is picked up the next time the daemon
+never interrupts what is running. It is picked up the next time the daemon
 starts on its own.
 
 If you'd rather click something, take an installer from the
@@ -36,7 +62,7 @@ has; the installer checks and tells you where to get it if yours doesn't.
 
 Needs Windows 10 1809 or newer, for ConPTY.
 
-## The GUI — `cargo run --release -p hmux-gui`
+## The GUI: `cargo run --release -p hmux-gui`
 
 A rail of terminals down one side, the active one filling the middle, and
 **that terminal's own browser** on the other.
@@ -57,7 +83,7 @@ The rail is on the right by default: it is a list you glance at, the terminal
 is the thing you look at, and the window buttons are already up in that corner.
 **Settings → Layout** swaps the two, and the choice is remembered per window.
 
-Each terminal owns a browser, so switching terminals switches the page —
+Each terminal owns a browser, so switching terminals switches the page:
 scroll position, forms and logins all still there, because it is a separate
 webview rather than one that re-navigates.
 
@@ -102,7 +128,7 @@ So there are two paths back, and which one you get is not a preference:
 
 - **Attach**, the ordinary one. The daemon is still up, the terminals are still
   running, and the window simply sits back down in front of them.
-- **Restore**, when the daemon is not there — the first ever run, or after a
+- **Restore**, when the daemon is not there. The first ever run, or after a
   reboot, which is the one thing no daemon survives. Then the terminals are
   rebuilt from `%APPDATA%\hmux\session.json`: the same shells in the same
   directories, with the old output replayed above a rule saying where the
@@ -110,7 +136,7 @@ So there are two paths back, and which one you get is not a preference:
   the old ones is gone.
 
 The daemon exits on its own once the last terminal has closed and no window is
-attached, so it is not a permanent resident — it just outlives any particular
+attached, so it is not a permanent resident. It just outlives any particular
 window.
 
 The browser's address bar is collapsed to the `────` strip at the top of the
@@ -118,7 +144,7 @@ page, and comes down when you reach it or press <kbd>Ctrl+Shift+L</kbd>. It goes
 away again when you leave it, or on <kbd>Esc</kbd>. Ctrl+L is left to the shell.
 
 The strip has to exist rather than being nothing at all, because the page is a
-native webview painted over the app — an overlay in that rectangle would be
+native webview painted over the app, and an overlay in that rectangle would be
 invisible and unclickable. The strip is the one part of the top edge the webview
 does not cover, which is also why the title bar spans the full width above every
 column rather than stopping at the browser. For the same reason its height is
@@ -139,7 +165,7 @@ to print, and a silent failure is how a bug here stays invisible.
 
 ---
 
-## The console version — `cargo run --release --bin hmux`
+## The console version: `cargo run --release --bin hmux`
 
 A rail of buttons down the left, one terminal filling the rest of the screen.
 Click a button, get that terminal.
@@ -171,7 +197,7 @@ cargo build --release
 .\target\release\hmux.exe --shell powershell.exe
 ```
 
-The console version needs a real console — piping its output somewhere is
+The console version needs a real console. Piping its output somewhere is
 refused with a clear message rather than a crash.
 
 ## Keys
@@ -209,7 +235,7 @@ terminal emulator inside:
 
 | Module | Job |
 | --- | --- |
-| `term` | the host console — raw mode, VT in/out, alternate screen, restored on drop and on panic |
+| `term` | the host console: raw mode, VT in/out, alternate screen, restored on drop and on panic |
 | `pane` | one ConPTY child, a reader thread draining it, a waiter thread watching it die |
 | `grid` | the emulator: a rectangle of styled cells, mutated by the escape sequences the shell emits |
 | `layout` | where the rail, the terminal, and the status line are |
@@ -219,7 +245,7 @@ terminal emulator inside:
 | `cwd` | read another process's working directory out of its PEB, for session restore |
 
 `vte` does the escape-sequence lexing (it's Alacritty's parser). Everything in
-`grid.rs` is the semantics — what each sequence does to the screen.
+`grid.rs` is the semantics, meaning what each sequence does to the screen.
 
 The GUI does not use `grid` at all: it streams raw pty bytes to xterm.js, which
 is already a better terminal emulator than this project would maintain. It uses
@@ -244,7 +270,7 @@ Two things that are easy to get wrong and are handled:
 - **No scrollback UI** in the console front end. History is captured
   (`Grid::scrollback`) but there's no way to look at it yet. The GUI has
   xterm.js's.
-- **No reflow on resize.** Lines are truncated and padded, not re-wrapped —
+- **No reflow on resize.** Lines are truncated and padded, not re-wrapped.
   tmux mostly declines to solve this too.
 - **Mouse depends on the host.** Clicks in the console version rely on conhost
   translating them into VT sequences. Works in Windows Terminal; may not in the
@@ -263,7 +289,7 @@ byte sink deadlocks after exactly four bytes. The console front end answers from
 `Grid`; the GUI relies on xterm.js answering.
 
 **A WebView2 can only be created before the event loop runs.** Creating one from
-a command handler wedges the main thread permanently — every later command stops
+a command handler wedges the main thread permanently. Every later command stops
 being answered, which looks like the app going quiet rather than like an error.
 That's why browsers come from a pool built during `setup` and handed out
 afterwards, and why there is a ceiling on how many terminals get one.
