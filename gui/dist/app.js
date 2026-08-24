@@ -553,6 +553,30 @@ function openExternal(url) {
 /** Which pane the popover is showing: the root, or Settings. */
 let settingsPane = "root";
 
+/**
+ * Where a new terminal opens.
+ *
+ * Empty means the shell decides, which is its own default rather than wherever
+ * hmux was launched from. Worth being a setting because the alternative is
+ * `cd`-ing to the same place as the first command in every terminal you open,
+ * and because the answer is almost always one directory that does not change
+ * for weeks at a time.
+ */
+const START_DIR_KEY = "hmux.startdir";
+let startDir = localStorage.getItem(START_DIR_KEY) || "";
+
+function setStartDir(path) {
+  const next = (path || "").trim();
+  if (next === startDir) return;
+  startDir = next;
+  try {
+    if (startDir) localStorage.setItem(START_DIR_KEY, startDir);
+    // Removed rather than stored empty, so "unset" and "set to nothing" cannot
+    // drift apart.
+    else localStorage.removeItem(START_DIR_KEY);
+  } catch {}
+}
+
 function openSettings(pane = "root") {
   settingsPane = pane;
   const menu = els.settingsMenu;
@@ -631,6 +655,9 @@ function openSettings(pane = "root") {
         useShippedBackground(file, lit, at)
       );
     }
+
+    heading("Starting directory");
+    startDirField();
   } else {
     item("#i-gear", "Settings", () => openSettings("settings"), {
       keepOpen: true,
@@ -889,6 +916,62 @@ async function showAbout() {
     "hmux",
     `v${version} — Hunter's Terminal Multiplexer · ${HOME_SITE}`
   );
+}
+
+/**
+ * The starting-directory row: a path, and a button that fills in the obvious one.
+ *
+ * A field rather than a list of options, because the answer is a path and there
+ * is no set of them small enough to offer. "Here" is what makes it usable
+ * without a folder picker: the directory people want is nearly always the one
+ * they are already working in, and the daemon already reports it per terminal.
+ */
+function startDirField() {
+  const row = document.createElement("div");
+  row.className = "menu-field";
+  // Every click in the document closes the menu. This one belongs to it.
+  row.onclick = (e) => e.stopPropagation();
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.spellcheck = false;
+  input.value = startDir;
+  input.placeholder = "Home";
+  input.title = "Where a new terminal opens. Leave empty for the shell's own default.";
+  input.onkeydown = (e) => {
+    // Or the window's own shortcuts fire while typing a path.
+    e.stopPropagation();
+    if (e.key === "Enter") {
+      setStartDir(input.value);
+      closeSettings();
+    }
+    if (e.key === "Escape") closeSettings();
+  };
+  // Committed on the way out too, so clicking away is not silently a discard.
+  input.onblur = () => setStartDir(input.value);
+  row.appendChild(input);
+
+  const here = document.createElement("button");
+  here.className = "menu-field-btn";
+  here.type = "button";
+  here.textContent = "Here";
+  here.title = "Use the folder the current terminal is in";
+  here.onclick = (e) => {
+    e.stopPropagation();
+    const entry = activeId === null ? null : terminals.get(activeId);
+    const cwd = entry && entry.info && entry.info.cwd;
+    if (!cwd) {
+      // The daemon works this out from the shell's own prompt, so a terminal
+      // that has not printed one yet genuinely does not know where it is.
+      showError("starting directory", "this terminal has not said where it is yet");
+      return;
+    }
+    input.value = cwd;
+    setStartDir(cwd);
+  };
+  row.appendChild(here);
+
+  els.settingsMenu.appendChild(row);
 }
 
 function closeSettings() {
@@ -1954,6 +2037,17 @@ async function toggleBrowser() {
 
 let maximized = false;
 
+/**
+ * Whether F11 is currently on.
+ *
+ * Kept so the title bar can stop being a drag surface. Rust refuses the drag
+ * anyway, since the window can enter fullscreen without the page asking, but
+ * knowing here means the double click does not maximise a window that is
+ * already covering the screen, and the pointer does not claim it can move
+ * something it cannot.
+ */
+let fullscreen = false;
+
 function refreshMaxIcon() {
   els.winMaxIcon.setAttribute("href", maximized ? "#i-restore" : "#i-max");
 }
@@ -1984,12 +2078,18 @@ function wireWindowFrame() {
   // not land on a control sitting on top of it.
   els.titlebar.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
+    // Fullscreen is not a window you move.
+    if (fullscreen) return;
     if (e.target.closest("button, input, .menu, .tb-name")) return;
     if (!e.target.closest("[data-drag]")) return;
     invoke("window_start_drag").catch(() => {});
   });
 
   els.titlebar.addEventListener("dblclick", (e) => {
+    // Nor one you maximise: it is already bigger than maximised, and toggling
+    // it here would leave the window fullscreen and unmaximised at once, which
+    // only F11 could then undo.
+    if (fullscreen) return;
     if (e.target.closest("button, input, .menu, .tb-name")) return;
     if (!e.target.closest("[data-drag]")) return;
     toggleMaximize();
@@ -2055,7 +2155,14 @@ async function newTerminal(shell = null) {
   // the worst case is now a pause rather than a lost terminal.
   // 80x24 is a placeholder; the real size is sent by syncSize once laid out.
   const id = await withTimeout(
-    invoke("create_terminal", { shell, cols: 80, rows: 24 }),
+    invoke("create_terminal", {
+      shell,
+      // Null rather than "", so the daemon can tell "no preference" from a
+      // path that happens to be empty.
+      cwd: startDir || null,
+      cols: 80,
+      rows: 24,
+    }),
     20000,
     "create_terminal"
   );
@@ -3665,7 +3772,10 @@ async function main() {
       // out of it, and a restore glyph on a button that would not restore
       // anything is worse than no feedback.
       invoke("window_toggle_fullscreen")
-        .then(() => {
+        .then((now) => {
+          // The command answers with the state it ended up in, so the title bar
+          // knows whether it is still a drag surface.
+          fullscreen = now;
           // Refit explicitly, and more than once.
           //
           // Going fullscreen gains exactly the height of the taskbar, about

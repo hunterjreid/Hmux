@@ -227,7 +227,19 @@ fn window_close(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn window_start_drag(app: tauri::AppHandle) -> Result<(), String> {
-    main_window(&app)?.start_dragging().map_err(|e| e.to_string())
+    let window = main_window(&app)?;
+
+    // A fullscreen window does not move, and Windows agrees only about half the
+    // time: `start_dragging` on one either does nothing or tears it off the
+    // screen into a floating window the size of the display, which is not a
+    // state anybody asked for and takes a second F11 to get out of. Refusing is
+    // the whole fix, and it is done here rather than in the UI because the
+    // window can enter fullscreen without the page being the one that asked.
+    if window.is_fullscreen().map_err(|e| e.to_string())? {
+        return Ok(());
+    }
+
+    window.start_dragging().map_err(|e| e.to_string())
 }
 
 // ---- session persistence -------------------------------------------------
@@ -344,18 +356,25 @@ fn create_terminal(
     state: tauri::State<'_, Mutex<Sessions>>,
     app: tauri::AppHandle,
     shell: Option<String>,
+    cwd: Option<String>,
     cols: u16,
     rows: u16,
 ) -> Result<SessionId, String> {
     // Defaults to the most colourful shell present, not cmd.exe.
     let shell = shell.unwrap_or_else(shells::default_program);
 
+    // None means the shell's own default. Deliberately not checked for
+    // existence here: the daemon is the one that has to start a process in it
+    // and is the only side that can fail honestly, and a directory that exists
+    // now can be gone by the time it is used anyway.
+    let cwd = cwd.filter(|c| !c.is_empty()).map(PathBuf::from);
+
     // The lock is held only long enough to send the request. Waiting for the
     // answer with it still held is what made the window stop responding.
     let pending = {
         let mut sessions = state.lock().map_err(|e| e.to_string())?;
         sessions
-            .create(&app, &shell, cols, rows)
+            .create(&app, &shell, cwd, cols, rows)
             .map_err(|e| format!("{e:#}"))?
     };
     Sessions::await_created(pending)

@@ -139,14 +139,21 @@ impl Sessions {
         Ok(())
     }
 
+    /// Start a new shell, in `cwd` if one is given.
+    ///
+    /// `None` leaves it to the shell, which is its own default rather than
+    /// wherever hmux happened to be launched from. The daemon has taken a
+    /// directory since restore needed one; this is the same field, now reachable
+    /// from the setting as well as from a session being brought back.
     pub fn create(
         &mut self,
         _app: &AppHandle,
         shell: &str,
+        cwd: Option<PathBuf>,
         cols: u16,
         rows: u16,
     ) -> Result<Receiver<SessionId>> {
-        self.start(shell, None, String::new(), cols, rows)
+        self.start(shell, cwd, String::new(), cols, rows)
     }
 
     /// Bring a session back: the same shell, in the directory the old one was
