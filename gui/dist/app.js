@@ -3088,7 +3088,9 @@ function saveLayout() {
         return {
           id,
           name: e.customName,
-          browserOpen: e.browserOpen,
+          // Whether the panel was open is deliberately not written: the window
+          // always comes back with it shut. See `restoreTabs`.
+          //
           // Every page open beside this terminal, so reopening the window puts
           // the same set back rather than one of them.
           tabs: tabsOf(e).map((t) => t.url || ""),
@@ -3210,12 +3212,15 @@ async function restoreTabs(entry, remembered) {
   const tabs = tabsOf(entry);
   entry.activeTab = tabs.length ? tabs[0].id : null;
 
-  // Only if there is a page in it. A browser left on the new tab page comes
-  // back as half a window of search box next to a terminal it has nothing to
-  // do with.
-  const showing = activeTab(entry);
-  entry.browserOpen =
-    !!remembered.browserOpen && !!showing && showing.url !== HOME_PAGE;
+  // Shut, always, however it was left.
+  //
+  // The pages are still restored and the panel still remembers them, so opening
+  // it puts the same set back. What is not restored is the panel being open,
+  // because a window that opens with half of it given to a browser is a window
+  // that opens showing you less of the thing you came back for. Reopening it is
+  // one click; getting a terminal back to full width is one click you did not
+  // ask to have to make, every single time.
+  entry.browserOpen = false;
 }
 
 /**
