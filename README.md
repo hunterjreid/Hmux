@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://hmux.hunterjreid.com/">hmux.hunterjreid.com</a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/hunterjreid/hmux/releases/latest">Releases</a>
+  <a href="https://github.com/hunterjreid/Hmux/releases/latest">Releases</a>
   &nbsp;·&nbsp;
   <a href="#how-it-works">How it works</a>
 </p>
@@ -32,7 +32,7 @@ a console-only version that runs inside the terminal you are already in.
 ## Install
 
 ```powershell
-irm https://raw.githubusercontent.com/hunterjreid/hmux/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/hunterjreid/Hmux/master/install.ps1 | iex
 ```
 
 Puts the latest release in `%LOCALAPPDATA%\hmux`, adds it to your PATH and makes
@@ -54,7 +54,7 @@ never interrupts what is running. It is picked up the next time the daemon
 starts on its own.
 
 If you'd rather click something, take an installer from the
-[latest release](https://github.com/hunterjreid/hmux/releases/latest).
+[latest release](https://github.com/hunterjreid/Hmux/releases/latest).
 
 Neither is code signed yet, so Windows will have something to say the first
 time you run it. `hmux-gui` needs the WebView2 runtime, which Windows 11 already

@@ -1,6 +1,26 @@
-# Publish a release when a version tag is pushed.
+# Publish a release, either from a version tag or from any push to master.
 #
-#   git tag v0.1.0 && git push origin v0.1.0
+#   git push                          -> 0.1.<run number>, tagged and released
+#   git tag v0.2.0 && git push --tags -> 0.2.0, exactly as written
+#
+# Every push releasing something is what makes the in-app updater work at all.
+# The window compares its own version against the newest release on GitHub, so
+# a repository with no releases in it can never offer one, and that is not a bug
+# anyone can see from inside the app: `checkForUpdate` treats the 404 as "you
+# are up to date" and says nothing. Cutting a release by hand was therefore a
+# step that could be forgotten silently and for months.
+#
+# The patch number is the workflow's own run number rather than a count of
+# commits or a date. It only ever goes up, it cannot repeat after a history
+# rewrite, and it survives two pushes landing in the same minute — all three of
+# which matter, because the updater's comparison is numeric and a version that
+# ever goes backwards is one that offers a downgrade forever.
+#
+# The major and minor come from Cargo.toml, so bumping either is still done in
+# the file and the tag follows. Nothing here writes them back to the repository:
+# the stamped files exist only inside the build, since committing a version bump
+# from a workflow that runs on push is how you get a workflow that triggers
+# itself.
 #
 # Produces five assets. The three bare executables are what install.ps1
 # fetches; the installers are for people who would rather click something.
@@ -20,6 +40,8 @@ name: release
 
 on:
   push:
+    branches:
+      - master
     tags:
       - "v*"
   # So a failed release can be retried without moving the tag.
@@ -31,6 +53,13 @@ on:
 
 permissions:
   contents: write
+
+# A push landing while the one before it is still building would otherwise race
+# to create a release, and the loser fails on a tag that now exists. Newer wins:
+# the older build is already superseded by the code in the newer one.
+concurrency:
+  group: release
+  cancel-in-progress: true
 
 jobs:
   windows:
@@ -46,9 +75,49 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.event.inputs.tag }}"
-          if (-not $tag) { $tag = "${{ github.ref_name }}" }
-          "tag=$tag"                        >> $env:GITHUB_OUTPUT
-          "version=$($tag -replace '^v','')" >> $env:GITHUB_OUTPUT
+          if (-not $tag) {
+            $ref = "${{ github.ref }}"
+            if ($ref.StartsWith("refs/tags/")) {
+              # A tag says exactly what it wants to be called.
+              $tag = "${{ github.ref_name }}"
+            } else {
+              # A branch push names itself. Major and minor are whatever the
+              # crate currently claims, so bumping them stays a code change.
+              $base = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' |
+                       Select-Object -First 1).Matches[0].Groups[1].Value
+              $parts = $base.Split('.')
+              $tag = "v$($parts[0]).$($parts[1]).${{ github.run_number }}"
+            }
+          }
+          $version = $tag -replace '^v',''
+          "tag=$tag"         >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "building $version as $tag"
+
+      # The app has to agree with the release about what it is called, or the
+      # updater never stops offering the update it has already installed:
+      # `isNewer` compares the release tag against what `app_version` reports,
+      # and a binary still saying 0.1.0 is older than every release forever.
+      - name: Stamp the version into the build
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+
+          foreach ($f in @("Cargo.toml", "gui/src-tauri/Cargo.toml")) {
+            $text = Get-Content $f -Raw
+            # Only the first one, which is the [package] version. A dependency
+            # pinned to a version string further down is not ours to rewrite.
+            $text = [regex]::Replace($text, '(?m)^version\s*=\s*"[^"]+"', "version = `"$version`"", 1)
+            Set-Content $f $text -NoNewline -Encoding utf8
+          }
+
+          $f = "gui/src-tauri/tauri.conf.json"
+          $text = Get-Content $f -Raw
+          $text = [regex]::Replace($text, '"version"\s*:\s*"[^"]+"', "`"version`": `"$version`"", 1)
+          Set-Content $f $text -NoNewline -Encoding utf8
+
+          Select-String -Path Cargo.toml, gui/src-tauri/Cargo.toml, gui/src-tauri/tauri.conf.json `
+                        -Pattern '"?version"?\s*[:=]\s*"' | Select-Object -First 3
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -110,5 +179,11 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag @assets --clobber
           } else {
-            gh release create $tag @assets --title "hmux $tag" --generate-notes
+            # `--target` is what creates the tag for a branch push. Without it
+            # the release would be cut against the default branch's tip, which
+            # is only the same commit until someone pushes twice quickly.
+            gh release create $tag @assets `
+              --title "hmux $tag" `
+              --target "${{ github.sha }}" `
+              --generate-notes
           }

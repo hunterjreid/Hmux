@@ -1,6 +1,6 @@
 # hmux installer.
 #
-#   irm https://raw.githubusercontent.com/hunterjreid/hmux/master/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/hunterjreid/Hmux/master/install.ps1 | iex
 #
 # Fetches the latest release, drops the two binaries in %LOCALAPPDATA%\hmux,
 # puts that directory on PATH and adds a Start menu entry. Run it again later
@@ -25,7 +25,7 @@ $ErrorActionPreference = 'Stop'
 # PowerShell 5.1 still negotiates TLS 1.0 by default, which github.com refuses.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$Repo       = 'hunterjreid/hmux'
+$Repo       = 'hunterjreid/Hmux'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'hmux'
 # hmux-daemon is not optional. It owns the terminals; the two front ends are
 # views onto it. An install without it is a window that cannot open a shell,
