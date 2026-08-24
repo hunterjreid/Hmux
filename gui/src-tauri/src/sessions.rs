@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -145,7 +145,7 @@ impl Sessions {
         shell: &str,
         cols: u16,
         rows: u16,
-    ) -> Result<SessionId> {
+    ) -> Result<Receiver<SessionId>> {
         self.start(shell, None, String::new(), cols, rows)
     }
 
@@ -163,7 +163,7 @@ impl Sessions {
         replay: String,
         cols: u16,
         rows: u16,
-    ) -> Result<SessionId> {
+    ) -> Result<Receiver<SessionId>> {
         self.start(shell, cwd, replay, cols, rows)
     }
 
@@ -174,7 +174,7 @@ impl Sessions {
         replay: String,
         cols: u16,
         rows: u16,
-    ) -> Result<SessionId> {
+    ) -> Result<Receiver<SessionId>> {
         let (tx, rx) = channel();
         {
             let client = self.client()?;
@@ -198,14 +198,34 @@ impl Sessions {
             },
         })?;
 
+        Ok(rx)
+    }
+
+    /// Wait for one of the receivers handed back above.
+    ///
+    /// Split from sending the request so the caller can let go of whatever
+    /// lock it is holding first. See the note on [`Sessions::attach`].
+    pub fn await_created(rx: Receiver<SessionId>) -> Result<SessionId> {
         rx.recv_timeout(REPLY_TIMEOUT)
             .map_err(|_| anyhow!("the daemon did not start a shell"))
+    }
+
+    pub fn await_backlog(id: SessionId, rx: Receiver<Backlog>) -> Result<Backlog> {
+        rx.recv_timeout(REPLY_TIMEOUT)
+            .map_err(|_| anyhow!("the daemon did not send terminal {id}'s history"))
     }
 
     /// Attach to a terminal the daemon already had, and hand back everything it
     /// has said so far. The warm path: this is what makes a reopened window
     /// show the session rather than a new one.
-    pub fn attach(&self, id: SessionId) -> Result<Backlog> {
+    /// Ask for a terminal's history. Returns the channel the answer arrives on.
+    ///
+    /// Sending and waiting are two calls on purpose. This used to do both, and
+    /// the command that called it held the `Sessions` mutex across the whole
+    /// wait: fifteen seconds during which every other command needing sessions
+    /// queued behind it, which is a window that says Not Responding. The wait
+    /// is the caller's to do, after it has let go.
+    pub fn attach(&self, id: SessionId) -> Result<Receiver<Backlog>> {
         let (tx, rx) = channel();
         {
             let client = self.client()?;
@@ -217,8 +237,7 @@ impl Sessions {
             waiting.replays.entry(id).or_default().push(tx);
         }
         self.ask(Request::Attach { id, from: 0 })?;
-        rx.recv_timeout(REPLY_TIMEOUT)
-            .map_err(|_| anyhow!("the daemon did not send terminal {id}'s history"))
+        Ok(rx)
     }
 
     /// What the daemon knows about a session, for the session file.

@@ -318,10 +318,13 @@ fn restore_terminal(
         )
     };
 
-    let mut sessions = state.lock().map_err(|e| e.to_string())?;
-    sessions
-        .restore(&app, &shell, cwd, replay, cols, rows)
-        .map_err(|e| format!("{e:#}"))
+    let pending = {
+        let mut sessions = state.lock().map_err(|e| e.to_string())?;
+        sessions
+            .restore(&app, &shell, cwd, replay, cols, rows)
+            .map_err(|e| format!("{e:#}"))?
+    };
+    Sessions::await_created(pending).map_err(|e| format!("{e:#}"))
 }
 
 // Browsers are claimed by tabs, not by terminals. A terminal starting is no
@@ -347,9 +350,15 @@ fn create_terminal(
     // Defaults to the most colourful shell present, not cmd.exe.
     let shell = shell.unwrap_or_else(shells::default_program);
 
-    let mut sessions = state.lock().map_err(|e| e.to_string())?;
-    sessions
-        .create(&app, &shell, cols, rows)
+    // The lock is held only long enough to send the request. Waiting for the
+    // answer with it still held is what made the window stop responding.
+    let pending = {
+        let mut sessions = state.lock().map_err(|e| e.to_string())?;
+        sessions
+            .create(&app, &shell, cols, rows)
+            .map_err(|e| format!("{e:#}"))?
+    };
+    Sessions::await_created(pending)
         .map_err(|e| format!("{e:#}"))
 }
 
@@ -401,11 +410,15 @@ fn terminal_backlog(
     state: tauri::State<'_, Mutex<Sessions>>,
     id: SessionId,
 ) -> Result<sessions::Backlog, String> {
-    state
-        .lock()
-        .map_err(|e| e.to_string())?
-        .attach(id)
-        .map_err(|e| format!("{e:#}"))
+    // Send under the lock, wait without it. Holding the mutex across a
+    // fifteen second wait blocked every other command that needs sessions,
+    // which is most of them, and the window went Not Responding for as long as
+    // one terminal took to answer.
+    let pending = {
+        let sessions = state.lock().map_err(|e| e.to_string())?;
+        sessions.attach(id).map_err(|e| format!("{e:#}"))?
+    };
+    Sessions::await_backlog(id, pending).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
