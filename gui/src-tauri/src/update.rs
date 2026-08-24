@@ -68,37 +68,124 @@ fn checked_name(name: &str) -> Result<&str, String> {
         .ok_or_else(|| format!("{name} is not one of this app's binaries"))
 }
 
-/// Put a downloaded binary in the staging directory.
+/// Reject anything that is not plausibly one of our binaries.
 ///
-/// The bytes come from the webview, which did the download: it already has an
-/// HTTP stack with progress reporting in it, and adding one here to avoid a
-/// single IPC hop would be a dependency for its own sake.
-#[tauri::command]
-pub fn update_stage(name: String, bytes: Vec<u8>) -> Result<(), String> {
-    let name = checked_name(&name)?;
-
-    // An empty or absurdly small file is a failed download that returned 200 —
-    // a proxy's error page, most often. Applying it would replace a working
-    // binary with something that cannot start, and the app would be gone
-    // rather than merely un-updated.
+/// An empty or absurdly small file is a failed download that returned 200, a
+/// proxy's error page most often. Applying it would replace a working binary
+/// with something that cannot start, so the app would be gone rather than
+/// merely out of date. The `MZ` check catches the same thing when the error
+/// page happens to be large: every one of these is a PE image.
+fn checked_bytes(name: &str, bytes: &[u8]) -> Result<(), String> {
     if bytes.len() < 64 * 1024 {
         return Err(format!(
             "{name} came back as {} bytes, which is not a program",
             bytes.len()
         ));
     }
-    // Every one of these is a PE image. Checking the magic costs nothing and
-    // catches the case above when the error page happens to be large.
     if !bytes.starts_with(b"MZ") {
         return Err(format!("{name} is not a Windows executable"));
     }
+    Ok(())
+}
 
+fn stage(name: &str, bytes: &[u8]) -> Result<(), String> {
     let dir = staging_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-
     let target = dir.join(name);
-    std::fs::write(&target, &bytes)
-        .map_err(|e| format!("could not write {}: {e}", target.display()))?;
+    std::fs::write(&target, bytes)
+        .map_err(|e| format!("could not write {}: {e}", target.display()))
+}
+
+/// One release asset to fetch.
+#[derive(serde::Deserialize)]
+pub struct Asset {
+    name: String,
+    url: String,
+}
+
+/// How far along the whole download is, as one figure across all three files.
+#[derive(Clone, serde::Serialize)]
+struct Progress {
+    received: u64,
+    total: u64,
+}
+
+/// Fetch every binary of a release and stage them.
+///
+/// This used to be the webview's job, on the reasoning that it already had an
+/// HTTP stack and adding one here would be a dependency for its own sake. That
+/// was wrong for a reason no amount of care in this file could have fixed:
+/// GitHub redirects a release asset to a host that sends no
+/// `Access-Control-Allow-Origin`, so the webview's `fetch` is refused by its
+/// own security model before a byte arrives, and reports it as the bare string
+/// "Failed to fetch". `api.github.com` does send that header, so the version
+/// check succeeded and only the download failed, which made the update look
+/// like it was working right up until the moment it silently was not.
+///
+/// It also stops a ten megabyte binary crossing the IPC boundary as a JSON
+/// array of ten million numbers, which is what the old staging command was
+/// being handed.
+///
+/// All three are downloaded before any is staged, and staging is a separate
+/// directory from the install, so a failure part way through leaves the running
+/// install untouched rather than half replaced.
+#[tauri::command]
+pub async fn update_download(app: tauri::AppHandle, assets: Vec<Asset>) -> Result<(), String> {
+    use tauri::Emitter;
+
+    for a in &assets {
+        checked_name(&a.name)?;
+    }
+
+    let client = reqwest::Client::builder()
+        // GitHub answers a request with no user agent with 403.
+        .user_agent(concat!("hmux/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| format!("could not start an HTTP client: {e}"))?;
+
+    // Sizes first, so the bar is honest from the first byte rather than
+    // jumping as each file finishes. A HEAD that does not answer with a length
+    // costs nothing: the total is then an underestimate and the bar is clamped.
+    let mut total = 0u64;
+    for a in &assets {
+        if let Ok(head) = client.head(&a.url).send().await {
+            total += head.content_length().unwrap_or(0);
+        }
+    }
+
+    let mut received = 0u64;
+    let mut fetched: Vec<(String, Vec<u8>)> = Vec::new();
+
+    for a in &assets {
+        let mut response = client
+            .get(&a.url)
+            .send()
+            .await
+            .map_err(|e| format!("could not reach {}: {e}", a.name))?;
+        if !response.status().is_success() {
+            return Err(format!("{}: HTTP {}", a.name, response.status()));
+        }
+
+        let mut bytes: Vec<u8> = Vec::with_capacity(response.content_length().unwrap_or(0) as usize);
+        // `chunk` rather than a stream, so this needs no extra trait in scope
+        // and no futures crate of its own.
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| format!("{} stopped part way: {e}", a.name))?
+        {
+            received += chunk.len() as u64;
+            bytes.extend_from_slice(&chunk);
+            let _ = app.emit("update-progress", Progress { received, total });
+        }
+
+        checked_bytes(&a.name, &bytes)?;
+        fetched.push((a.name.clone(), bytes));
+    }
+
+    for (name, bytes) in &fetched {
+        stage(name, bytes)?;
+    }
     Ok(())
 }
 
@@ -238,18 +325,19 @@ mod tests {
         // A proxy or captive portal answering 200 with an HTML error page is
         // the realistic version of this, and installing it would leave the
         // machine with no working hmux rather than an out of date one.
-        let html = b"<!DOCTYPE html><html>error</html>".to_vec();
-        let err = update_stage("hmux.exe".into(), html).unwrap_err();
+        let html = b"<!DOCTYPE html><html>error</html>";
+        let err = checked_bytes("hmux.exe", html).unwrap_err();
         assert!(err.contains("not a program"), "{err}");
 
         let big_but_wrong = vec![b'<'; 128 * 1024];
-        let err = update_stage("hmux.exe".into(), big_but_wrong).unwrap_err();
+        let err = checked_bytes("hmux.exe", &big_but_wrong).unwrap_err();
         assert!(err.contains("not a Windows executable"), "{err}");
     }
 
     #[test]
-    fn nothing_is_staged_under_a_name_that_was_refused() {
-        let err = update_stage("evil.exe".into(), vec![b'M', b'Z']).unwrap_err();
-        assert!(err.contains("not one of this app's binaries"), "{err}");
+    fn a_real_looking_image_passes() {
+        let mut ok = vec![b'M', b'Z'];
+        ok.resize(128 * 1024, 0);
+        assert!(checked_bytes("hmux.exe", &ok).is_ok());
     }
 }

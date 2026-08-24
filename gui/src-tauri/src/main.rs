@@ -678,7 +678,7 @@ fn main() {
             get_background,
             set_background,
             restore_terminal,
-            update::update_stage,
+            update::update_download,
             update::update_staged,
             update::update_apply,
         ])

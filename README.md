@@ -1,4 +1,8 @@
-<h1 align="center">hmux</h1>
+<p align="center">
+  <img src=".github/hero.jpg" alt="A terminal, a rail of live sessions and a browser in one window" width="100%" />
+</p>
+
+<h1 align="center">Hmux</h1>
 
 <p align="center">
   <strong>Hunter's Terminal Multiplexer.</strong><br />
@@ -22,7 +26,7 @@
 ---
 
 The shells do not belong to the window. They belong to a daemon with no window
-of its own, so closing hmux closes a view onto them rather than the things
+of its own, so closing Hmux closes a view onto them rather than the things
 themselves. A build you started and then quit the window on is still building
 when you come back.
 

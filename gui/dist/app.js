@@ -687,10 +687,12 @@ function openSettings(pane = "root") {
       () => {
         // The six-hourly check is silent when there is nothing new. Asked for
         // explicitly, saying nothing back reads as broken.
-        checkForUpdate().then(() => {
-          if (!updateReady && !updateInProgress) {
-            showError("update", "you are on the newest version");
-          }
+        checkForUpdate(true).then(() => {
+          if (updateReady || updateInProgress) return;
+          // A failure has already said what it was. Claiming to be up to date
+          // on top of it would be a second, contradictory answer.
+          if (updateFailed) return;
+          showError("update", "you are on the newest version");
         });
       },
       { note: appVersion ? `v${appVersion}` : "" }
@@ -3364,13 +3366,33 @@ const UPDATE_BINARIES = ["hmux-gui.exe", "hmux.exe", "hmux-daemon.exe"];
 let updateReady = null;
 let updateInProgress = false;
 
-async function checkForUpdate() {
+/**
+ * Why the last check came to nothing, if it was not simply being up to date.
+ *
+ * Kept so that asking explicitly can tell the two apart. Reporting a check that
+ * failed as "you are on the newest version" is worse than saying nothing: it is
+ * a confident answer to the question, and it is wrong.
+ */
+let updateFailed = "";
+
+/**
+ * What is being downloaded, for the progress event to redraw against.
+ *
+ * The event carries only bytes, because Rust has no business knowing what the
+ * dialogue says.
+ */
+let updateTarget = null;
+
+async function checkForUpdate(explicit = false) {
   if (updateReady || updateInProgress) return;
+  updateFailed = "";
 
   let current;
   try {
     current = await invoke("app_version");
-  } catch {
+  } catch (e) {
+    updateFailed = `could not read this build's version: ${e}`;
+    if (explicit) showError("update", updateFailed);
     return;
   }
 
@@ -3378,8 +3400,15 @@ async function checkForUpdate() {
     const response = await fetch(RELEASES_API, {
       headers: { Accept: "application/vnd.github+json" },
     });
-    // A repository with no releases yet answers 404, which is not a problem.
-    if (!response.ok) return;
+    // A repository with no releases yet answers 404, and that genuinely is
+    // nothing to report: there is no update because there are none at all.
+    if (!response.ok) {
+      if (response.status !== 404) {
+        updateFailed = `GitHub answered ${response.status}`;
+        if (explicit) showError("update", updateFailed);
+      }
+      return;
+    }
 
     const release = await response.json();
     const tag = release.tag_name;
@@ -3398,9 +3427,12 @@ async function checkForUpdate() {
     }
 
     await downloadUpdate(tag, current, assets);
-  } catch {
+  } catch (e) {
     // Offline, rate limited, DNS down. Quietly not offering an update is the
-    // right failure here: this is never why someone opened a terminal.
+    // right failure for the six-hourly check: this is never why someone opened
+    // a terminal. Someone who asked deserves an answer either way.
+    updateFailed = String(e);
+    if (explicit) showError("update", `could not check: ${e}`);
   }
 }
 
@@ -3417,62 +3449,35 @@ async function checkForUpdate() {
  */
 async function downloadUpdate(tag, current, assets) {
   updateInProgress = true;
+  updateTarget = { tag, current };
   showUpdateModal({ tag, current, phase: "downloading", percent: 0 });
 
   try {
-    // Content-Length per asset, so the bar is honest from the first byte
-    // rather than jumping when a file finishes.
-    const sizes = [];
-    for (const name of UPDATE_BINARIES) {
-      const head = await fetch(assets.get(name), { method: "HEAD" });
-      sizes.push(Number(head.headers.get("content-length")) || 0);
-    }
-    const total = sizes.reduce((a, b) => a + b, 0);
-    let done = 0;
-
-    for (const name of UPDATE_BINARIES) {
-      const response = await fetch(assets.get(name));
-      if (!response.ok) throw new Error(`${name}: HTTP ${response.status}`);
-
-      // Read it in pieces so the bar moves during a nine megabyte download
-      // rather than sitting at zero and then finishing.
-      const reader = response.body.getReader();
-      const parts = [];
-      let size = 0;
-      for (;;) {
-        const { done: finished, value } = await reader.read();
-        if (finished) break;
-        parts.push(value);
-        size += value.length;
-        done += value.length;
-        if (total) {
-          showUpdateModal({
-            tag,
-            current,
-            phase: "downloading",
-            percent: Math.min(99, Math.round((done / total) * 100)),
-          });
-        }
-      }
-
-      const bytes = new Uint8Array(size);
-      let at = 0;
-      for (const part of parts) {
-        bytes.set(part, at);
-        at += part.length;
-      }
-      await invoke("update_stage", { name, bytes: Array.from(bytes) });
-    }
+    // Rust does the fetching. See `update_download`: the webview is not allowed
+    // to, because GitHub redirects a release asset to a host that sends no
+    // `Access-Control-Allow-Origin`, and the refusal arrives as the bare string
+    // "Failed to fetch" with no clue in it.
+    await invoke("update_download", {
+      assets: UPDATE_BINARIES.map((name) => ({ name, url: assets.get(name) })),
+    });
 
     updateReady = tag;
     showUpdateModal({ tag, current, phase: "ready" });
   } catch (e) {
     // Nothing has been swapped — staging is a separate directory — so the
     // running install is untouched and the next check will try again.
+    //
+    // Said out loud, not only logged. This failing silently is what made a
+    // broken updater look like a working one: the dialogue appeared, vanished
+    // within a second, and asking again answered "you are on the newest
+    // version", which was not true and was not what had happened.
     logInfo(`could not download ${tag}: ${e}`);
     hideUpdateModal();
+    updateFailed = String(e);
+    showError("update", `could not download ${tag}: ${e}`);
   } finally {
     updateInProgress = false;
+    updateTarget = null;
   }
 }
 
@@ -3872,6 +3877,22 @@ async function main() {
   // them is gone with it, and a window full of panes that quietly stopped being
   // connected to anything is the worst way to find out.
   await listen("daemon-error", (event) => showError("daemon", event.payload));
+
+  // Rust does the downloading, so the bar is driven from there. Clamped at 99
+  // because the last thing to happen after the bytes arrive is staging them,
+  // and a bar that reads 100 while something is still going is a bar that has
+  // stopped telling the truth.
+  await listen("update-progress", (event) => {
+    if (!updateInProgress || !updateTarget) return;
+    const { received, total } = event.payload || {};
+    if (!total) return;
+    showUpdateModal({
+      tag: updateTarget.tag,
+      current: updateTarget.current,
+      phase: "downloading",
+      percent: Math.min(99, Math.round((received / total) * 100)),
+    });
+  });
 
   // Every terminal's browser reports its own loading, whether or not you are
   // looking at it, so the state is kept per terminal and only the active one

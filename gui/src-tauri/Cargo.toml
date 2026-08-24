@@ -15,6 +15,20 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 
+# Downloading an update. The webview cannot do it: GitHub serves release assets
+# from a host that sends no `Access-Control-Allow-Origin`, so `fetch` fails with
+# a bare "Failed to fetch" before a byte arrives. `api.github.com` does send it,
+# which is exactly why the version check worked and only the download did not.
+#
+# Already in the tree via tauri, so this costs the TLS backend and nothing else.
+# `default-tls` is schannel on Windows, which is the OS's own, rather than
+# rustls and a second copy of the world's certificates.
+#
+# `default-features = false` on purpose: the defaults pull HTTP/2, which wants a
+# newer `h2` than the index carries, and HTTP/1.1 is entirely adequate for
+# fetching three files once. `default-tls` is the only feature actually needed.
+reqwest = { version = "0.13", default-features = false, features = ["default-tls"] }
+
 # The terminal half: ConPTY handling, shared with the console front end.
 hmux = { path = "../.." }
 
