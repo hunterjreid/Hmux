@@ -363,11 +363,21 @@ fn create_terminal(
     // Defaults to the most colourful shell present, not cmd.exe.
     let shell = shell.unwrap_or_else(shells::default_program);
 
-    // None means the shell's own default. Deliberately not checked for
-    // existence here: the daemon is the one that has to start a process in it
-    // and is the only side that can fail honestly, and a directory that exists
-    // now can be gone by the time it is used anyway.
-    let cwd = cwd.filter(|c| !c.is_empty()).map(PathBuf::from);
+    // Nothing set means home, not "wherever the daemon happens to have been
+    // launched from". That was the old behaviour and it is not a default so
+    // much as an accident: a shell started from the window inherited the
+    // directory of whichever process last started the daemon, so installing
+    // from the repository meant every new terminal for the rest of the day
+    // opened inside the repository. Home is at least a decision, and it is the
+    // one a fresh console gives you.
+    //
+    // Deliberately not checked for existence: the daemon is the side that has
+    // to start a process in it and the only one that can fail honestly about
+    // it, and a directory that exists now can be gone by the time it is used.
+    let cwd = cwd
+        .filter(|c| !c.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from));
 
     // The lock is held only long enough to send the request. Waiting for the
     // answer with it still held is what made the window stop responding.

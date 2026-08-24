@@ -556,11 +556,13 @@ let settingsPane = "root";
 /**
  * Where a new terminal opens.
  *
- * Empty means the shell decides, which is its own default rather than wherever
- * hmux was launched from. Worth being a setting because the alternative is
- * `cd`-ing to the same place as the first command in every terminal you open,
- * and because the answer is almost always one directory that does not change
- * for weeks at a time.
+ * Empty means home, which is what a fresh console gives you. It used to mean
+ * whatever directory the daemon was launched from, which is not a default so
+ * much as an accident of how it was started.
+ *
+ * Worth being a setting because the alternative is `cd`-ing to the same place
+ * as the first command in every terminal you open, and because the answer is
+ * almost always one directory that does not change for weeks at a time.
  */
 const START_DIR_KEY = "hmux.startdir";
 let startDir = localStorage.getItem(START_DIR_KEY) || "";
@@ -968,7 +970,7 @@ function startDirField() {
   input.spellcheck = false;
   input.value = startDir;
   input.placeholder = "Home";
-  input.title = "Where a new terminal opens. Leave empty for the shell's own default.";
+  input.title = "Where a new terminal opens. Leave it empty for your home folder.";
   input.onkeydown = (e) => {
     // Or the window's own shortcuts fire while typing a path.
     e.stopPropagation();
