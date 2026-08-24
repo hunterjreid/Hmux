@@ -605,7 +605,7 @@ function openSettings(pane = "root") {
   };
 
   /** A plain row: an icon, a label, and something it does. */
-  const item = (href, label, onPick, { keepOpen = false } = {}) => {
+  const item = (href, label, onPick, { keepOpen = false, note = "" } = {}) => {
     const button = document.createElement("button");
     button.className = "row";
     button.type = "button";
@@ -613,6 +613,15 @@ function openSettings(pane = "root") {
     const text = document.createElement("span");
     text.textContent = label;
     button.appendChild(text);
+    // A quiet value on the right of the row. Used for the version, which
+    // belongs beside the thing that would change it rather than behind an
+    // About dialogue you have to go looking for.
+    if (note) {
+      const tag = document.createElement("span");
+      tag.className = "row-note";
+      tag.textContent = note;
+      button.appendChild(tag);
+    }
     button.onclick = () => {
       if (!keepOpen) closeSettings();
       onPick();
@@ -672,15 +681,20 @@ function openSettings(pane = "root") {
     // nothing to do with it.
     item("#i-help", "Help", () => openExternal(HELP_PAGE));
     item("#i-feedback", "Send feedback", () => openExternal(FEEDBACK_PAGE));
-    item("#i-download", "Check for updates", () => {
-      // The six-hourly check is silent when there is nothing new. Asked for
-      // explicitly, saying nothing back reads as broken.
-      checkForUpdate().then(() => {
-        if (!updateReady && !updateInProgress) {
-          showError("update", "you are on the newest version");
-        }
-      });
-    });
+    item(
+      "#i-download",
+      "Check for updates",
+      () => {
+        // The six-hourly check is silent when there is nothing new. Asked for
+        // explicitly, saying nothing back reads as broken.
+        checkForUpdate().then(() => {
+          if (!updateReady && !updateInProgress) {
+            showError("update", "you are on the newest version");
+          }
+        });
+      },
+      { note: appVersion ? `v${appVersion}` : "" }
+    );
 
     separator();
 
@@ -898,6 +912,21 @@ async function loadAccountName() {
   } catch {
     // The menu falls back to a placeholder rather than failing to open.
   }
+}
+
+/**
+ * This build's version, read once so the menu can be built synchronously.
+ *
+ * The menu is drawn on click and cannot wait on a command, so asking at open
+ * time would mean a row that says nothing the first time you look at it, which
+ * is the one time you are most likely to be looking.
+ */
+let appVersion = "";
+
+async function loadVersion() {
+  try {
+    appVersion = await invoke("app_version");
+  } catch {}
 }
 
 /**
@@ -3697,6 +3726,7 @@ async function main() {
   await loadBackground();
   // Not awaited: only the profile menu wants it, and that cannot be open yet.
   loadAccountName();
+  loadVersion();
   document.getElementById("err-close").onclick = () => (els.err.hidden = true);
 
   /**

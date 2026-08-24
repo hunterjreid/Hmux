@@ -1239,6 +1239,17 @@ body {
   color: var(--muted);
 }
 
+/* The version, on the right of the row that would change it. Pushed over
+   rather than right-aligned in a column, so it sits against the edge whatever
+   the label beside it is. */
+.menu button.row .row-note {
+  margin-left: auto;
+  padding-left: 10px;
+  color: var(--faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .menu button.row:hover .ico {
   color: var(--text);
 }
