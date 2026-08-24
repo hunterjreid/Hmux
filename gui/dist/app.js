@@ -179,6 +179,47 @@ function activeTab(entry) {
   return tabs.find((t) => t.id === entry.activeTab) || tabs[0] || null;
 }
 
+/** The tab in the air, or null. Read by every other tab's drag handlers. */
+let draggingTabId = null;
+
+/**
+ * Put `id` where `beforeId` currently is, or at the end when dropped past the
+ * last tab.
+ *
+ * Tabs arrive in whatever order links happened to be clicked, so the one being
+ * worked in ends up buried among a dozen it opened. Nothing downstream depends
+ * on this array's order — a tab's browser is claimed by its id, and the pool is
+ * keyed by that — so rearranging it is a pure display change and cannot put a
+ * page and its webview out of step.
+ */
+function moveTab(entry, id, beforeId) {
+  const tabs = tabsOf(entry);
+  const from = tabs.findIndex((t) => t.id === id);
+  if (from < 0) return;
+  const [moved] = tabs.splice(from, 1);
+  // Looked up after the removal, or every index past the one taken out is off
+  // by one and a tab dragged rightwards lands one place short.
+  const at = beforeId === null ? tabs.length : tabs.findIndex((t) => t.id === beforeId);
+  tabs.splice(at < 0 ? tabs.length : at, 0, moved);
+  renderTabs();
+}
+
+/**
+ * Take the drag marks off the strip.
+ *
+ * `marksOnly` keeps the carried tab faded mid-drag; without it this is also the
+ * cleanup that runs at the end. Both classes are always cleared rather than the
+ * one just set, because the indicator that is never removed is the one that
+ * leaves two insertion points drawn at once.
+ */
+function clearTabDropMarks(marksOnly) {
+  for (const el of els.tabs.children) {
+    el.classList.remove("tab-drop-before", "tab-drop-after");
+    if (!marksOnly) el.classList.remove("tab-dragging");
+  }
+  if (!marksOnly) els.tabs.classList.remove("reordering");
+}
+
 /**
  * Add a page and claim a browser for it.
  *
@@ -333,6 +374,54 @@ function renderTabs() {
     el.title = tab.url === HOME_PAGE ? "New tab" : tab.url;
     el.onclick = () => selectTab(entry, tab.id);
 
+    // Reordering, the same way the rail does it. Chromium does not send a click
+    // after a drop, so selecting and dragging can share the element without the
+    // drag ending on the tab it was dropped onto being selected.
+    el.draggable = true;
+    el.ondragstart = (e) => {
+      draggingTabId = tab.id;
+      el.classList.add("tab-dragging");
+      els.tabs.classList.add("reordering");
+      // Firefox refuses to start a drag without data on the transfer.
+      try {
+        e.dataTransfer.setData("text/plain", String(tab.id));
+        e.dataTransfer.effectAllowed = "move";
+      } catch {}
+    };
+    el.ondragend = () => {
+      draggingTabId = null;
+      clearTabDropMarks();
+    };
+    el.ondragover = (e) => {
+      if (draggingTabId === null || draggingTabId === tab.id) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      // Left or right of the midpoint decides which side of this tab the drop
+      // lands on, which is the only thing that lets a drop onto the last tab
+      // mean "after it" rather than "before it".
+      const box = el.getBoundingClientRect();
+      const after = e.clientX > box.left + box.width / 2;
+      clearTabDropMarks(true);
+      const target = after ? el.nextElementSibling : el;
+      if (target) target.classList.add("tab-drop-before");
+      else el.classList.add("tab-drop-after");
+    };
+    el.ondrop = (e) => {
+      if (draggingTabId === null || draggingTabId === tab.id) return;
+      e.preventDefault();
+      const box = el.getBoundingClientRect();
+      const after = e.clientX > box.left + box.width / 2;
+      const ids = tabsOf(entry).map((t) => t.id);
+      const at = ids.indexOf(tab.id);
+      const beforeId = after ? (ids[at + 1] ?? null) : tab.id;
+      const moving = draggingTabId;
+      // Cleared before the move, because `moveTab` re-renders and the elements
+      // carrying these classes are gone by the time it returns.
+      draggingTabId = null;
+      clearTabDropMarks();
+      moveTab(entry, moving, beforeId);
+    };
+
     // The site's mark, taken from the site itself rather than through a
     // favicon service: hmux would otherwise tell a third party every address
     // you open, which is not a reasonable price for a 13px picture.
@@ -454,7 +543,7 @@ function applyLoading() {
  *  this is the thing written for someone who wants to know what hmux is. */
 const HOME_SITE = "https://hmux.hunterjreid.com/";
 const HELP_PAGE = HOME_SITE;
-const FEEDBACK_PAGE = "https://github.com/hunterjreid/hmux/issues/new";
+const FEEDBACK_PAGE = "https://github.com/hunterjreid/Hmux/issues/new";
 
 /** Hand a link to the machine's browser rather than to the panel. */
 function openExternal(url) {
@@ -1104,26 +1193,75 @@ function makeTerminal(id, initial = null) {
   });
   terminals.set(id, entry);
 
-  invoke("terminal_backlog", { id })
-    .then(({ text, lastSeq }) => {
-      if (text) term.write(text);
-      entry.lastSeq = lastSeq;
-      entry.ready = true;
-      for (const chunk of entry.pending) {
-        if (chunk.seq > entry.lastSeq) {
-          term.write(chunk.data);
-          entry.lastSeq = chunk.seq;
-        }
-      }
-      entry.pending = [];
-      // A restored terminal opens at the prompt, not part way up last week's
-      // output. Queued behind the writes above, which is when the buffer has
-      // its final length.
-      term.write("", () => term.scrollToBottom());
-    })
-    .catch((e) => showError("terminal_backlog", e));
+  attachBacklog(entry, id);
 
   return entry;
+}
+
+/** How many times to ask for a history before going live without it. */
+const BACKLOG_TRIES = 3;
+
+/**
+ * Write everything queued while attaching, and stop queueing.
+ *
+ * Live chunks are held until the replay's sequence number is known, because
+ * anything in both places would otherwise be written twice. Once this has run
+ * that question is settled and output goes straight to the screen.
+ */
+function goLive(entry) {
+  entry.ready = true;
+  for (const chunk of entry.pending) {
+    if (chunk.seq > entry.lastSeq) {
+      entry.term.write(chunk.data);
+      entry.lastSeq = chunk.seq;
+    }
+  }
+  entry.pending = [];
+  // A restored terminal opens at the prompt, not part way up last week's
+  // output. Queued behind the writes above, which is when the buffer has its
+  // final length.
+  entry.term.write("", () => entry.term.scrollToBottom());
+}
+
+/**
+ * Ask for a terminal's history, and keep the terminal usable if it never comes.
+ *
+ * Attaching is also what subscribes this window to live output, so a failed
+ * backlog used to be permanent and total: `ready` stayed false, every live
+ * chunk went into `pending` and was never written, and that terminal was a
+ * black rectangle for the rest of the window's life. One late reply and the
+ * terminal was gone, with no way back short of reopening the window.
+ *
+ * The reply can be late for an entirely ordinary reason. It queues behind that
+ * terminal's own output on the same pipe, so a shell printing hard pushes its
+ * own history behind however much scrollback is in front of it, and opening a
+ * window attaches to every terminal at once, which is exactly when that is
+ * most likely. Fifteen seconds is a long timeout precisely because the wait is
+ * legitimate.
+ *
+ * So: ask again, and if the history genuinely will not come, go live without
+ * it. Missing what was said before you opened the window is a far smaller loss
+ * than a terminal showing nothing at all. `lastSeq` is left at zero in that
+ * case, so everything queued is written: with no replay there is nothing for it
+ * to duplicate.
+ */
+async function attachBacklog(entry, id, attempt = 0) {
+  try {
+    const { text, lastSeq } = await invoke("terminal_backlog", { id });
+    // Closed, or the window moved on, while we were waiting.
+    if (terminals.get(id) !== entry) return;
+    if (text) entry.term.write(text);
+    entry.lastSeq = lastSeq;
+    goLive(entry);
+  } catch (e) {
+    if (terminals.get(id) !== entry) return;
+    if (attempt + 1 < BACKLOG_TRIES) {
+      logInfo(`terminal ${id}: no history yet, asking again`);
+      return attachBacklog(entry, id, attempt + 1);
+    }
+    showError("terminal_backlog", e);
+    goLive(entry);
+  }
 }
 
 /** Turn `C:\dir\a file.png` into a URL a webview will accept. */
@@ -1932,7 +2070,30 @@ async function newTerminal(shell = null) {
 /** The rail's current order, set by `refresh`. */
 let railIds = [];
 
+/**
+ * Terminals this window has closed, until the daemon stops listing them.
+ *
+ * `close_terminal` sends and does not wait, and `list_terminals` answers from a
+ * cached list the daemon refreshes by event, so the `refresh` at the end of a
+ * close almost always still contains the terminal that was just closed. What
+ * happened then is that adoption did its job perfectly: an id the daemon
+ * reports and this window does not have is exactly the case it exists for, so
+ * it attached to the terminal it had closed a moment earlier. That is a fifteen
+ * second wait for a reply that can never come, then "the daemon did not send
+ * terminal N's history", and a row that reappears in the rail after you closed
+ * it and then dies. Closing several in a row stacks those waits up, which is
+ * the part that looks like the window is about to go.
+ *
+ * A tombstone rather than a synchronous close: making the close wait for the
+ * daemon would put the fifteen seconds on the click instead of after it.
+ *
+ * Cleared as soon as the daemon stops reporting the id, so an id it reuses
+ * after a restart is not left permanently unopenable.
+ */
+const closed = new Set();
+
 async function closeTerminal(id) {
+  closed.add(id);
   await invoke("close_terminal", { id }).catch(console.error);
   const entry = terminals.get(id);
   if (entry) {
@@ -2513,6 +2674,13 @@ async function refresh() {
 function applyInfos(infos) {
   const now = performance.now();
 
+  // A terminal the daemon has stopped listing is closed as far as both sides
+  // are concerned, so its tombstone has done its job. Done before adoption, or
+  // an id would stay blocked for one refresh longer than it needs to be.
+  for (const id of closed) {
+    if (!infos.some((i) => i.id === id)) closed.delete(id);
+  }
+
   // Take on anything the daemon has that this window does not.
   //
   // A terminal can exist without the window knowing: a create whose reply came
@@ -2526,6 +2694,8 @@ function applyInfos(infos) {
   for (const info of infos) {
     if (terminals.has(info.id)) continue;
     if (adopting.has(info.id)) continue;
+    // Not one this window closed a moment ago. See `closed`.
+    if (closed.has(info.id)) continue;
     adopting.add(info.id);
     try {
       makeTerminal(info.id, {
@@ -3025,8 +3195,8 @@ async function restoreOrStartInner() {
 // one GET.
 
 const RELEASES_API =
-  "https://api.github.com/repos/hunterjreid/hmux/releases/latest";
-const RELEASES_PAGE = "https://github.com/hunterjreid/hmux/releases/latest";
+  "https://api.github.com/repos/hunterjreid/Hmux/releases/latest";
+const RELEASES_PAGE = "https://github.com/hunterjreid/Hmux/releases/latest";
 const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
 
 /** Is `candidate` a later version than `current`? Dotted numbers, `v` optional. */

@@ -1620,6 +1620,77 @@ body {
   box-shadow: inset 0 0 0 1px var(--hair);
 }
 
+/* The strip while a tab is in the air, matching the rail. */
+.tabs.reordering {
+  background: rgba(230, 25, 255, 0.04);
+  outline: 1px dashed rgba(230, 25, 255, 0.28);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+/* The tab being carried. Left in place so the strip does not reflow under the
+   pointer while you are aiming at it. */
+.tab.tab-dragging {
+  opacity: 0.3;
+  cursor: grabbing;
+}
+
+/*
+ * Where it would land: a line in the gap between two tabs, with a dot on the
+ * top end. The rail's indicator is the same idea turned ninety degrees — the
+ * question is "between which two", and anything painted inside a tab answers
+ * "onto which" instead.
+ */
+.tab.tab-drop-before,
+.tab.tab-drop-after {
+  position: relative;
+}
+
+.tab.tab-drop-before::after,
+.tab.tab-drop-after::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--drop);
+  box-shadow: 0 0 7px rgba(230, 25, 255, 0.55);
+  pointer-events: none;
+}
+
+/* Centred in the two pixel gap before the tab. */
+.tab.tab-drop-before::after {
+  left: -2px;
+}
+
+/* Only ever the last tab, so this one sits after it. */
+.tab.tab-drop-after::after {
+  right: -2px;
+}
+
+/* The end cap. */
+.tab.tab-drop-before::before,
+.tab.tab-drop-after::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--drop);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.tab.tab-drop-before::before {
+  left: -4px;
+}
+
+.tab.tab-drop-after::before {
+  right: -4px;
+}
+
 .tab-label {
   overflow: hidden;
   text-overflow: ellipsis;
