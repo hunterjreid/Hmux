@@ -164,6 +164,19 @@ pub async fn update_download(app: tauri::AppHandle, assets: Vec<Asset>) -> Resul
     // fetched, so this is exact and costs nothing.
     let total: u64 = assets.iter().map(|a| a.size).sum();
 
+    // Written down, because a zero here is silent everywhere else.
+    //
+    // That is exactly how the HEAD version failed: nothing errored, every byte
+    // arrived, the update installed — and the only symptom was a bar that
+    // never moved, which reads as a slow download rather than as a bug. A
+    // number in the log turns "the progress bar looks stuck" into one line
+    // that says whether it had anything to divide by.
+    crate::log_error(&format!(
+        "update: fetching {} bytes across {} files",
+        total,
+        assets.len()
+    ));
+
     let mut received = 0u64;
     let mut fetched: Vec<(String, Vec<u8>)> = Vec::new();
 

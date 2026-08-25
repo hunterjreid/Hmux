@@ -3657,6 +3657,12 @@ async function checkForUpdate(explicit = false) {
   // built, and the button for it says "Restart to update".
   try {
     if (!(await invoke("is_release_build"))) {
+      // Said out loud once, because "it stopped offering updates" and "it is
+      // correctly not offering updates" look identical from outside, and the
+      // flag is set in one line of one workflow file. If that line ever goes,
+      // every release quietly becomes its own last version, and this is the
+      // only place that would say so.
+      logInfo("not offering updates: this build did not come from a release");
       if (explicit) {
         showToast({
           key: "update-dev",
