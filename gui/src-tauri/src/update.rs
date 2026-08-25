@@ -101,6 +101,11 @@ fn stage(name: &str, bytes: &[u8]) -> Result<(), String> {
 pub struct Asset {
     name: String,
     url: String,
+    /// How many bytes it is, taken from the release GitHub already described.
+    ///
+    /// Carried rather than measured. See `update_download` for why asking is
+    /// the one thing that does not work.
+    size: u64,
 }
 
 /// How far along the whole download is, as one figure across all three files.
@@ -143,15 +148,21 @@ pub async fn update_download(app: tauri::AppHandle, assets: Vec<Asset>) -> Resul
         .build()
         .map_err(|e| format!("could not start an HTTP client: {e}"))?;
 
-    // Sizes first, so the bar is honest from the first byte rather than
-    // jumping as each file finishes. A HEAD that does not answer with a length
-    // costs nothing: the total is then an underestimate and the bar is clamped.
-    let mut total = 0u64;
-    for a in &assets {
-        if let Ok(head) = client.head(&a.url).send().await {
-            total += head.content_length().unwrap_or(0);
-        }
-    }
+    // The total is known before the first byte, so the bar is honest from the
+    // start rather than jumping as each file finishes.
+    //
+    // It comes with the assets rather than from a HEAD of each of them, and
+    // that is not only to save three round trips in front of the download.
+    // `Response::content_length` reports the size of the body that is about to
+    // be read, not the header — and a HEAD has no body, so it answers `Some(0)`
+    // however large the file is. The total was therefore always zero, and a bar
+    // divided by zero is a bar that never moves: the dialogue sat at 0% for the
+    // whole download and then jumped to asking about the restart, which reads
+    // as an update with no progress bar at all rather than one at nought.
+    //
+    // `size` is on every asset in the release JSON the version check already
+    // fetched, so this is exact and costs nothing.
+    let total: u64 = assets.iter().map(|a| a.size).sum();
 
     let mut received = 0u64;
     let mut fetched: Vec<(String, Vec<u8>)> = Vec::new();
@@ -332,6 +343,41 @@ mod tests {
         let big_but_wrong = vec![b'<'; 128 * 1024];
         let err = checked_bytes("hmux.exe", &big_but_wrong).unwrap_err();
         assert!(err.contains("not a Windows executable"), "{err}");
+    }
+
+    #[test]
+    fn an_asset_carries_the_size_the_release_declared() {
+        // The shape the webview sends, and the reason the progress bar works.
+        // Sizes used to be measured here with a HEAD per file, and
+        // `Response::content_length` reports the body about to be read rather
+        // than the header — a HEAD has no body, so it answered `Some(0)` for a
+        // thirteen megabyte binary and the bar divided by zero and never moved.
+        // GitHub states the size in the same release JSON the version check
+        // already fetched, so it travels with the address instead.
+        let assets: Vec<Asset> = serde_json::from_str(
+            r#"[
+                 {"name":"hmux-gui.exe","url":"https://example.invalid/g","size":13590528},
+                 {"name":"hmux.exe","url":"https://example.invalid/c","size":565760}
+               ]"#,
+        )
+        .expect("the webview's shape must deserialise");
+
+        assert_eq!(assets.iter().map(|a| a.size).sum::<u64>(), 14_156_288);
+    }
+
+    #[test]
+    fn a_working_copy_is_not_a_release_build() {
+        // `HMUX_RELEASE` is set by the release workflow and by nothing else, so
+        // this is false here and true only in a published binary. It is what
+        // stops the updater offering a local build "an update" to the last
+        // thing CI shipped — which it did, because the version in the
+        // repository is 0.1.0 and always will be, so every release is newer
+        // than every build anyone makes from source, forever. Taking that
+        // offer overwrote the binary you had just compiled.
+        assert!(
+            !crate::is_release_build(),
+            "a test run is a working copy, and a working copy is never a release"
+        );
     }
 
     #[test]

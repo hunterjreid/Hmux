@@ -42,7 +42,7 @@ function Fail($text) {
 }
 
 Write-Host ''
-Write-Host '  hmux' -ForegroundColor Cyan
+Write-Host '  Hmux' -ForegroundColor Cyan
 Write-Host '  terminals that keep running whether or not you are looking at them' -ForegroundColor DarkGray
 Write-Host ''
 
@@ -52,7 +52,7 @@ Write-Host ''
 # put a shell in, so there is no point installing anything.
 $build = [Environment]::OSVersion.Version.Build
 if ($build -lt 17763) {
-    Fail "hmux needs Windows 10 1809 or newer, and this is build $build."
+    Fail "Hmux needs Windows 10 1809 or newer, and this is build $build."
 }
 
 # Overwriting a running executable fails part way through and leaves a file
@@ -68,7 +68,7 @@ if ($build -lt 17763) {
 # left to hold.
 $running = Get-Process -Name 'hmux-gui', 'hmux' -ErrorAction SilentlyContinue
 if ($running) {
-    Fail 'hmux is already running. Close it, then run this again.'
+    Fail 'Hmux is already running. Close it, then run this again.'
 }
 
 # Sweep up anything moved aside by a previous run. These are only removable
@@ -189,7 +189,7 @@ try {
         (Join-Path $startMenu 'hmux.lnk'))
     $shortcut.TargetPath = Join-Path $InstallDir 'hmux-gui.exe'
     $shortcut.WorkingDirectory = $env:USERPROFILE
-    $shortcut.Description = 'hmux — terminals and a browser in one window'
+    $shortcut.Description = 'Hmux — terminals and a browser in one window'
     $shortcut.Save()
     Write-Step 'added a Start menu entry'
 } catch {

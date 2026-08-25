@@ -133,8 +133,18 @@ jobs:
 
       # A prebuilt CLI. Building tauri-cli from source here costs more than
       # the rest of this workflow put together.
+      #
+      # `HMUX_RELEASE` is what makes the updater willing to offer this binary an
+      # update at all, and this workflow is the only thing that sets it. The
+      # stamped version above says how new a build is; this says whether the
+      # number means anything — a working copy reports 0.1.0 whatever has been
+      # done to it, so without this every local build is offered a "newer"
+      # release that overwrites it. Removing it silently turns the updater off
+      # for everybody, so if updates stop arriving, look here first.
       - name: Build the window and its installers
         working-directory: gui/src-tauri
+        env:
+          HMUX_RELEASE: "1"
         run: npx --yes @tauri-apps/cli@^2 build
 
       - name: Collect the assets

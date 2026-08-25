@@ -78,6 +78,13 @@
   --accent: #6a7ec8;
   --accent-dim: rgba(106, 126, 200, 0.2);
   --focus: #3655b5;
+  /* The one button in the app that is a yes. `--accent` is the terminal's own
+     ansiBlue and is deliberately muted, because it is also the focus ring, the
+     pinned tick and the active tab — a colour that has to sit quietly behind
+     text all day. A button you are meant to press is the opposite job, and at
+     that saturation it read as another piece of chrome. */
+  --go: #2f7bf6;
+  --go-hover: #4d90ff;
   /* ansiBrightGreen / ansiBrightYellow / ansiBrightRed. */
   --busy: #a6e22e;
   --waiting: #e2e22e;
@@ -324,6 +331,14 @@ body {
    button that says "browser" next to a browser, and the way out is the X on
    the panel itself. */
 .app:not(.browser-closed) #browser-btn {
+  display: none;
+}
+
+/* Same argument for maximise in fullscreen: the window is already the whole
+   screen, so the button has nothing left to do and no honest glyph to do it
+   with. Minimise and close still mean what they say, and F11 is the way back.
+   See `refreshMaxIcon`. */
+.app.fullscreen #win-max {
   display: none;
 }
 
@@ -671,12 +686,12 @@ body {
  * Sized in `em` so it tracks the rail's own font like everything else here. */
 .term-btn .pin {
   display: none;
-  width: 0.85em;
-  height: 0.85em;
+  width: 0.95em;
+  height: 0.95em;
   flex: none;
-  margin-right: 0.42em;
+  margin-right: 0.34em;
   color: var(--faint);
-  transform: translateY(0.04em);
+  transform: translateY(0.06em);
 }
 
 .term-btn.pinned .pin {
@@ -1155,17 +1170,22 @@ body {
 
 /* A path, and the button that fills in the current terminal's. Not a row of
    options: the value is free text, and the menu's own rows are all buttons. */
+/* Stacked, and deliberately not one flex row.
+   A menu is absolutely positioned, so it is sized to fit what is in it — and a
+   `flex: 1` field inside a box still working out how wide it is has no share to
+   take, so it collapses to its own padding. That is what turned the path into a
+   dark square sitting next to a button, looking like an icon that had failed to
+   load rather than the field it was. A block that is simply 100% wide cannot do
+   that, and it also contributes an honest width to the menu around it. */
 .menu-field {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   padding: 2px 10px 8px;
 }
 
 .menu-field input {
-  flex: 1;
-  min-width: 0;
-  padding: 5px 8px;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
   border: none;
   border-radius: 6px;
   background: var(--elev);
@@ -1183,20 +1203,34 @@ body {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-.menu-field-btn {
-  flex: none;
-  padding: 5px 9px;
-  border: none;
+/* Equal halves. Neither answer is the recommended one — which you want depends
+   entirely on what you opened the menu to do — so neither gets the bigger half
+   or the accent.
+
+   Selected as `.menu button.…` rather than by class alone. Every button in a
+   menu is a full-width transparent row by default, and that rule is one
+   specificity point heavier than a bare class — so a chip written the obvious
+   way lost its background, its padding and its centring and rendered as bare
+   text, which is most of why this row read as broken. */
+.menu-field-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.menu button.menu-field-btn {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  padding: 6px 9px;
   border-radius: 6px;
   background: var(--elev);
   color: var(--faint);
-  font: inherit;
   font-size: 12px;
-  cursor: pointer;
-  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+  text-align: center;
 }
 
-.menu-field-btn:hover {
+.menu button.menu-field-btn:hover {
   background: var(--accent-dim);
   color: var(--text);
 }
@@ -1632,12 +1666,18 @@ body {
 
 /* The tabs themselves scroll sideways rather than shrinking to nothing: a
    strip of twelve slivers tells you how many pages are open and nothing else,
-   which is the one thing the strip is not for. */
+   which is the one thing the strip is not for.
+
+   Only as wide as the tabs in it. Filling the strip pushed the new-tab button
+   to the far right, so with one tab open the thing that makes another was an
+   inch of empty strip away from the thing it makes another OF — and it moved
+   every time a tab opened or closed. Sitting against the last tab, it is where
+   the row of them ends, which is where it is going to appear. */
 .tabs {
   display: flex;
   align-items: stretch;
   gap: 2px;
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -1672,11 +1712,15 @@ body {
 }
 
 /* The one the panel below is showing. It joins the page rather than sitting on
-   it, which is what makes the strip read as tabs rather than as buttons. */
+   it, which is what makes the strip read as tabs rather than as buttons.
+
+   No outline around it. A tab that is the same colour as the page below it is
+   already continuous with it — drawing a hairline round three sides then cut it
+   off from the very thing that shape is claiming it is part of, and turned one
+   open page into a boxed chip floating on a bar. */
 .tab.active {
   background: var(--browser);
   color: var(--text);
-  box-shadow: inset 0 0 0 1px var(--hair);
 }
 
 /* The strip while a tab is in the air, matching the rail. */
@@ -1963,69 +2007,115 @@ body {
   word-break: break-word;
 }
 
-/* ---------- the update dialogue ---------- */
+/* ---------- the toast ---------- */
 
 /*
- * Over everything, including the native browsers — which it can only manage
- * because `showUpdateModal` parks them first. A webview is a child surface
- * painted above the window, so no z-index here reaches over one; the scrim
- * covers the chrome and the pages are moved off-screen for the duration.
+ * Dead centre of the window, and fixed to it rather than to any column, so
+ * where it lands does not depend on which panels happen to be open.
+ *
+ * What it no longer has is the scrim the update dialogue used to sit on. That
+ * darkened the whole window to say "answer this first", which is true of a
+ * restart and is not true of a version number or a download that needs nothing
+ * from you. The card carries its own weight instead — a shadow deep enough to
+ * lift it off whatever is behind it.
+ *
+ * A native webview is painted above the chrome and cannot be covered by it, so
+ * the one thing this still borrows from the scrim is having the pages moved
+ * aside — but only when the card actually lands on one. See `showToast`.
  */
-.update-scrim {
+.toast {
   position: fixed;
-  inset: 0;
+  top: 50%;
+  left: 50%;
   z-index: 200;
-  display: grid;
-  place-items: center;
-  background: rgba(20, 20, 20, 0.72);
+  width: min(420px, calc(100vw - 40px));
+  padding: 16px 18px 17px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--chrome);
+  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.6);
+  /* Both axes in one transform. Centring with a negative margin would work
+     until the drop, which needs the same property: the two cannot both own it,
+     and `top`/`left: 50%` on their own put the card's corner at the middle. */
+  transform: translate(-50%, calc(-50% - 22px));
+  opacity: 0;
+  /* Leaving is quicker than arriving, and eases the other way — accelerating
+     out rather than settling in. A card going away is not news and should not
+     have to be watched; a card arriving is the entire point of it. */
+  transition:
+    transform 190ms cubic-bezier(0.4, 0, 1, 1),
+    opacity 150ms linear;
 }
 
-.update-scrim[hidden] {
+.toast.in {
+  transform: translate(-50%, -50%);
+  opacity: 1;
+  /* Expo-out over a short distance. It covers most of the drop immediately and
+     then settles, which is what makes it read as weight rather than as a
+     slide — and from the middle of the pane it only has to fall far enough to
+     have come from somewhere, not the height of the window. */
+  transition:
+    transform 380ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 170ms linear;
+}
+
+.toast[hidden] {
   display: none;
 }
 
-.update-card {
-  width: min(460px, calc(100vw - 48px));
-  padding: 26px 30px 30px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--chrome);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
-  text-align: center;
+.toast-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
 
-.update-card h2 {
-  margin: 0 0 10px;
-  font-size: 15px;
+.toast-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--text);
 }
 
-.update-card p {
-  margin: 0 0 20px;
-  font-size: 12.5px;
-  line-height: 1.55;
+/* Not an icon button: it sits in text rather than in a row of controls, and at
+   this size the usual 26px hit area would be taller than the line it is on. */
+.toast-x {
+  flex: none;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--fast) var(--ease);
+}
+
+.toast-x:hover {
+  color: var(--text);
+}
+
+.toast-body {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* One bar and one number. A download nobody chose to start does not also need
    a byte count and a transfer rate. */
-.update-progress {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-
-.update-bar {
-  width: 100%;
+.toast-bar {
+  margin-top: 11px;
   height: 4px;
   border-radius: 999px;
   background: var(--elev);
   overflow: hidden;
 }
 
-.update-bar span {
+.toast-bar span {
   display: block;
   height: 100%;
   border-radius: inherit;
@@ -2035,30 +2125,41 @@ body {
   transition: width var(--med) var(--ease);
 }
 
-.update-pct {
-  font-size: 12px;
-  color: var(--faint);
-}
-
-.update-go {
-  padding: 9px 20px;
+.toast-go {
+  margin-top: 12px;
+  padding: 8px 18px;
   border: none;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--go);
   color: #fff;
   font: inherit;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: background var(--fast) var(--ease);
 }
 
-.update-go:hover {
-  background: #7b8ed6;
+.toast-go:hover {
+  background: var(--go-hover);
 }
 
-.update-go:disabled {
+.toast-go:disabled {
   background: var(--elev-hi);
   color: var(--faint);
   cursor: default;
+}
+
+/* A failure keeps the same shape and changes colour. Somewhere else to look is
+   one more thing to learn about a window you are only passing through. */
+.toast.bad {
+  border-color: #7f1d1d;
+  background: #3a2226;
+}
+
+.toast.bad .toast-title {
+  color: #fca5a5;
+}
+
+.toast.bad .toast-body {
+  color: #e0a3a3;
 }

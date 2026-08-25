@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>hmux</title>
+    <title>Hmux</title>
     <link rel="stylesheet" href="vendor/xterm.css" />
     <link rel="stylesheet" href="app.css" />
   </head>
@@ -101,14 +101,21 @@
         <path d="M5.4 6.9 8 9.4l2.6-2.5" />
         <path d="M3.2 11.4v1.2a.9.9 0 0 0 .9.9h7.8a.9.9 0 0 0 .9-.9v-1.2" />
       </symbol>
-      <!-- A pushpin, the shape everyone already reads as pinned. Two attempts
-           preceded it: a three-quarter drawing pin whose head, shaft and point
-           closed into one blob at this size, and a circle over a line that
-           read as a balloon. Its own stroke width, being on a 24-unit grid. -->
-      <symbol id="i-pin" viewBox="0 0 24 24" stroke-width="2">
-        <path d="M12 17v5" />
+      <!-- `pin-angle-fill` from Bootstrap Icons (MIT), unmodified.
+           Borrowed rather than drawn, and angled rather than upright. This
+           renders at about twelve pixels in front of a terminal's name, and a
+           pushpin stood on end is a wide head over a long thin needle in a
+           square box: at that size the needle is sub-pixel, the head is a dash,
+           and what is left reads as a stray letter. The angled pin fills the
+           square and puts the head and the point at opposite corners where they
+           can be told apart, which is why it is the one every icon set draws.
+           Filled, with its own `fill` and `stroke`, because `.ico` sets the
+           opposite and the rail sets neither. -->
+      <symbol id="i-pin" viewBox="0 0 16 16">
         <path
-          d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"
+          fill="currentColor"
+          stroke="none"
+          d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .707c-.48.48-1.072.588-1.503.588-.177 0-.335-.018-.46-.039l-3.134 3.134a6 6 0 0 1 .16 1.013c.046.702-.032 1.687-.72 2.375a.5.5 0 0 1-.707 0l-2.829-2.828-3.182 3.182c-.195.195-1.219.902-1.414.707s.512-1.22.707-1.414l3.182-3.182-2.828-2.829a.5.5 0 0 1 0-.707c.688-.688 1.673-.767 2.375-.72a6 6 0 0 1 1.013.16l3.134-3.133a3 3 0 0 1-.04-.461c0-.43.108-1.022.589-1.503a.5.5 0 0 1 .353-.146"
         />
       </symbol>
       <symbol id="i-back" viewBox="0 0 16 16">
@@ -124,7 +131,15 @@
       </symbol>
     </svg>
 
-    <div class="app">
+    <!-- Shut in the markup, not only in script.
+         `applyBrowserVisibility` cannot run until the session has been restored
+         — it needs to know which terminal is showing — and restoring means a
+         round trip to the daemon. Every launch therefore painted a browser
+         column at its full width for as long as that took, and it is the first
+         second of the window, which is the whole of the impression it makes.
+         The panel is now always shut on startup (see `restoreTabs`), so the
+         first paint can simply say so and script only ever agrees with it. -->
+    <div class="app browser-closed">
       <!-- The window's own title bar. The OS one is off, so this carries the
            drag region and the minimise/maximise/close buttons as well as the
            active terminal's name. -->
@@ -196,6 +211,7 @@
            would be chrome for its own sake. -->
       <main class="term-panel">
         <div class="term-host" id="term-host"></div>
+
       </main>
 
       <div class="split" id="split-browser"></div>
@@ -243,12 +259,15 @@
     <div class="menu context" id="row-menu" hidden></div>
     <div class="menu settings" id="settings-menu" hidden></div>
 
-    <!-- An update that has already been downloaded, asking to be let in. Over
-         everything including the native browsers, which is the reason it is a
-         full-window scrim rather than a panel: a webview cannot be covered by
-         chrome, so the only way to sit above one is to have it moved out of
-         the way, which `update_apply` does by ending the process. -->
-    <div class="update-scrim" id="update-modal" hidden></div>
+    <!-- Updates, the version, and anything else worth one sentence. Dead centre
+         of the window and at the top level, not inside a column: it is the
+         window talking about itself rather than about the terminal you happen
+         to be looking at. A native browser is painted above the chrome and
+         cannot be covered by it, so on the rare occasion the card lands over an
+         open page, `showToast` has the pages moved aside for as long as it is
+         up — and only then, because doing it every time costs you the page you
+         were reading for a sentence that was never over it. -->
+    <div class="toast" id="toast" hidden aria-live="polite"></div>
 
     <!-- Failures used to be invisible: a terminal would exist but never show
          up, with the reason only in a console nobody can open. -->

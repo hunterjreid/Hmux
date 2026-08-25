@@ -37,7 +37,7 @@ const els = {
   filterBtn: document.getElementById("filter-btn"),
   railHead: document.getElementById("rail-head"),
   titlebar: document.getElementById("titlebar"),
-  updateModal: document.getElementById("update-modal"),
+  toast: document.getElementById("toast"),
   winMaxIcon: document.getElementById("win-max-icon"),
 };
 
@@ -132,6 +132,156 @@ function showError(where, e) {
 /** Note something worth having in the log even when nothing went wrong. */
 function logInfo(message) {
   invoke("ui_log", { message }).catch(() => {});
+}
+
+// -------------------------------------------------------------------- toast
+//
+// One card, dropped in at the top of the terminal and taken away again. It
+// carries anything the window has to say for itself that is worth a sentence
+// and not worth a dialogue: an update coming down, an update waiting, and the
+// answer to having asked for one when there is nothing to report.
+
+/** Removes the card once its exit has finished, rather than mid-flight. */
+let toastExit = null;
+
+/** Auto-dismissal for the messages that do not need answering. */
+let toastLife = null;
+
+/** Whether the pages were moved aside to let the card be seen. */
+let toastParked = false;
+
+/**
+ * Get the open page out from over the card, if it is over the card.
+ *
+ * A native webview is a child surface painted above the chrome, so no z-index
+ * reaches over one: a card that overlaps an open page has that page sitting on
+ * whatever part of it they share, and no amount of shadow fixes that. Moving
+ * the pages off-screen is the only answer, and it is the one the old full-window
+ * dialogue used unconditionally.
+ *
+ * Conditionally here, because it is not free. The card is 420px in the middle
+ * of the window and the panel is a column at one edge, so most of the time
+ * these do not touch — and taking someone's page away for a sentence that was
+ * never on top of it is a worse interruption than the sentence.
+ */
+function parkPagesForToast() {
+  const el = els.toast;
+  const entry = activeId === null ? null : terminals.get(activeId);
+  if (!el || el.hidden || !entry || !entry.browserOpen) return;
+
+  const card = el.getBoundingClientRect();
+  const slot = els.slot.getBoundingClientRect();
+  const overlaps =
+    card.right > slot.left &&
+    card.left < slot.right &&
+    card.bottom > slot.top &&
+    card.top < slot.bottom;
+  if (!overlaps) return;
+
+  toastParked = true;
+  invoke("browser_layout", {
+    active: null,
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    force: true,
+  }).catch(() => {});
+}
+
+/**
+ * Take the card away.
+ *
+ * `display: none` cannot simply be set here: the exit is a transition, and an
+ * element that stops being displayed on the first frame of one never plays it.
+ * So the class comes off, and the element goes at the far end.
+ */
+function hideToast() {
+  clearTimeout(toastLife);
+  clearTimeout(toastExit);
+  toastLife = null;
+  const el = els.toast;
+  if (!el || el.hidden) return;
+  el.classList.remove("in");
+  toastExit = setTimeout(() => {
+    el.hidden = true;
+    el.innerHTML = "";
+    el.dataset.key = "";
+    // Put the page back only if it was this that took it away. Applying an
+    // update never reaches here — that ends the process instead.
+    if (toastParked) {
+      toastParked = false;
+      pushBrowserBounds(true);
+    }
+  }, 230);
+}
+
+/**
+ * Put the card up, or update the one already there.
+ *
+ * `key` is what tells those two apart. A download reports itself many times a
+ * second, and rebuilding the card on each would restart the bar's own
+ * transition from nothing every time — the number would climb and the bar
+ * would sit still, which is a worse lie than no bar at all. Same key, so the
+ * same elements are kept and only the width and the text change.
+ *
+ * @param percent  a bar, when there is one. Zero draws an empty bar; leaving
+ *                 it out draws no bar, which are different states.
+ * @param action   `{ label, run }` for the card that has something to answer.
+ * @param life     milliseconds before it takes itself away. Anything with an
+ *                 action is left alone: a card that leaves while you are
+ *                 reading the button is a card that wasted the interruption.
+ */
+function showToast({ key, title, body, percent, action, bad = false, life = 0 }) {
+  const el = els.toast;
+  if (!el) return;
+  clearTimeout(toastExit);
+  clearTimeout(toastLife);
+
+  if (el.dataset.key !== key || el.hidden) {
+    el.innerHTML = `
+      <div class="toast-head">
+        <span class="toast-title"></span>
+        <button class="toast-x" title="Dismiss">✕</button>
+      </div>
+      <div class="toast-body"></div>
+      ${percent === undefined ? "" : `<div class="toast-bar"><span></span></div>`}
+      ${action ? `<button class="toast-go"></button>` : ""}`;
+    el.dataset.key = key;
+    el.querySelector(".toast-x").onclick = hideToast;
+  }
+
+  el.classList.toggle("bad", bad);
+  el.querySelector(".toast-title").textContent = title;
+  el.querySelector(".toast-body").textContent = body || "";
+
+  const bar = el.querySelector(".toast-bar span");
+  if (bar) bar.style.width = `${Math.max(0, Math.min(100, percent || 0))}%`;
+
+  const go = el.querySelector(".toast-go");
+  if (go && action) {
+    go.textContent = action.label;
+    go.onclick = () => action.run(go);
+  }
+
+  // Displayed and then, a frame later, told to arrive. Both in one go would
+  // give the browser nothing to transition from: the element would be created
+  // already in its final state and simply appear there.
+  if (el.hidden) {
+    el.hidden = false;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        el.classList.add("in");
+        // Measured once it is laid out, because until then it has no rectangle
+        // to compare against the page's.
+        parkPagesForToast();
+      })
+    );
+  } else {
+    el.classList.add("in");
+  }
+
+  if (life) toastLife = setTimeout(hideToast, life);
 }
 
 /**
@@ -694,7 +844,16 @@ function openSettings(pane = "root") {
           // A failure has already said what it was. Claiming to be up to date
           // on top of it would be a second, contradictory answer.
           if (updateFailed) return;
-          showError("update", "you are on the newest version");
+          // Good news, so it goes in the card and not in the error bar. It
+          // used to come back as a red strip along the bottom of the window
+          // reading "update: you are on the newest version", which is the
+          // right answer wearing the clothes of a failure.
+          showToast({
+            key: "update-current",
+            title: "You are on the newest version",
+            body: appVersion ? `Hmux v${appVersion}` : "",
+            life: 3400,
+          });
         });
       },
       { note: appVersion ? `v${appVersion}` : "" }
@@ -936,40 +1095,66 @@ async function loadVersion() {
 /**
  * What this is and which build of it you have.
  *
- * In the error bar rather than a dialogue of its own: it is one line, it is
- * dismissed the same way everything else here is, and a second modal for it
- * would be a whole component for a version number.
+ * In the card rather than a dialogue of its own: it is two lines, it is
+ * dismissed the same way everything else here is, and a second modal for a
+ * version number would be a whole component for one fact.
+ *
+ * It used to go through `showError`, which meant asking what version you were
+ * running answered in a red strip across the bottom of the window, in the
+ * colour the app uses for something having gone wrong. Nothing had.
  */
 async function showAbout() {
   let version = "?";
   try {
     version = await invoke("app_version");
   } catch {}
-  showError(
-    "hmux",
-    `v${version} — Hunter's Terminal Multiplexer · ${HOME_SITE}`
-  );
+
+  // A working copy says 0.1.0 whatever has been done to it — the release
+  // workflow is what writes a real number, and only into its own build. So on
+  // a local build the version is not a version, and saying so is the
+  // difference between "you have an old one" and "you have your own".
+  let local = false;
+  try {
+    local = !(await invoke("is_release_build"));
+  } catch {}
+
+  showToast({
+    key: "about",
+    title: local ? `Hmux v${version} (local build)` : `Hmux v${version}`,
+    body: `Hunter's Terminal Multiplexer\n${HOME_SITE}`,
+    life: 6000,
+  });
 }
 
 /**
- * The starting-directory row: a path, and a button that fills in the obvious one.
+ * The starting-directory row: a path, and the two answers worth a button.
  *
  * A field rather than a list of options, because the answer is a path and there
- * is no set of them small enough to offer. "Here" is what makes it usable
- * without a folder picker: the directory people want is nearly always the one
- * they are already working in, and the daemon already reports it per terminal.
+ * is no set of them small enough to offer. The buttons are what make it usable
+ * without a folder picker: the directory people want is nearly always either
+ * the one they are already working in — which the daemon reports per terminal —
+ * or their home folder, which is the empty string and not something anyone
+ * should have to work out how to type.
+ *
+ * The path gets a line of its own and the buttons get the next one. Sharing one
+ * row is what made this look broken: a menu is sized to fit its contents, and a
+ * `flex: 1` field in a box that is measuring itself has nothing to be one whole
+ * share OF, so it collapsed to a dark square the width of its own padding and
+ * sat there next to a button, looking like a swatch that had failed to load.
  */
 function startDirField() {
-  const row = document.createElement("div");
-  row.className = "menu-field";
-  // Every click in the document closes the menu. This one belongs to it.
-  row.onclick = (e) => e.stopPropagation();
+  const field = document.createElement("div");
+  field.className = "menu-field";
+  // Every click in the document closes the menu. These belong to it.
+  field.onclick = (e) => e.stopPropagation();
 
   const input = document.createElement("input");
   input.type = "text";
   input.spellcheck = false;
   input.value = startDir;
-  input.placeholder = "Home";
+  // The placeholder is the value, not a label for it: empty genuinely means
+  // home, so saying so where the path would be is the whole explanation.
+  input.placeholder = "Your home folder";
   input.title = "Where a new terminal opens. Leave it empty for your home folder.";
   input.onkeydown = (e) => {
     // Or the window's own shortcuts fire while typing a path.
@@ -982,29 +1167,50 @@ function startDirField() {
   };
   // Committed on the way out too, so clicking away is not silently a discard.
   input.onblur = () => setStartDir(input.value);
-  row.appendChild(input);
+  field.appendChild(input);
 
-  const here = document.createElement("button");
-  here.className = "menu-field-btn";
-  here.type = "button";
-  here.textContent = "Here";
-  here.title = "Use the folder the current terminal is in";
-  here.onclick = (e) => {
-    e.stopPropagation();
+  const buttons = document.createElement("div");
+  buttons.className = "menu-field-row";
+
+  const button = (label, title, run) => {
+    const el = document.createElement("button");
+    el.className = "menu-field-btn";
+    el.type = "button";
+    el.textContent = label;
+    el.title = title;
+    el.onclick = (e) => {
+      e.stopPropagation();
+      run();
+    };
+    buttons.appendChild(el);
+  };
+
+  button("Here", "Use the folder the current terminal is in", () => {
     const entry = activeId === null ? null : terminals.get(activeId);
     const cwd = entry && entry.info && entry.info.cwd;
     if (!cwd) {
       // The daemon works this out from the shell's own prompt, so a terminal
       // that has not printed one yet genuinely does not know where it is.
-      showError("starting directory", "this terminal has not said where it is yet");
+      showToast({
+        key: "start-dir",
+        title: "This terminal has not said where it is yet",
+        body: "Hmux reads the folder from the shell's prompt. Press Enter in it and try again.",
+        bad: true,
+        life: 6000,
+      });
       return;
     }
     input.value = cwd;
     setStartDir(cwd);
-  };
-  row.appendChild(here);
+  });
 
-  els.settingsMenu.appendChild(row);
+  button("Home", "Open new terminals in your home folder", () => {
+    input.value = "";
+    setStartDir("");
+  });
+
+  field.appendChild(buttons);
+  els.settingsMenu.appendChild(field);
 }
 
 function closeSettings() {
@@ -1794,6 +2000,22 @@ async function selectTerminal(id) {
   const entry = terminals.get(id);
   entry.unread = 0;
 
+  // Whether this terminal was at the end, read before anything below can move
+  // it — the same question the wheel handler asks for the same reason.
+  //
+  // Arriving at a terminal is not one reflow either. `fitTerminal` skips
+  // anything not on screen, so a hidden terminal keeps whatever size it had
+  // when it was last looked at, however much the window has changed since; the
+  // fit that runs the instant it appears is therefore the big one, and the
+  // panel state and column widths for this terminal land around it. Every one
+  // of those rewraps a scrollback that can be fifty thousand lines, and
+  // `preservingView` can only hold a position it was told before the rewrap it
+  // is wrapping — not the one after. So a terminal left sitting at its prompt
+  // came back somewhere near the top of its own history, which is the one place
+  // it certainly was not.
+  const buffer = entry.term.buffer.active;
+  const wasAtBottom = buffer.viewportY >= buffer.baseY;
+
   // Restore whatever this terminal had beside it, then bring its own browser
   // forward and park the others.
   const showing = activeTab(entry);
@@ -1804,6 +2026,17 @@ async function selectTerminal(id) {
   syncSize(id);
   entry.term.focus();
   renderButtons();
+
+  if (wasAtBottom) {
+    // Three times, for the three moments this can be undone: the frame the fit
+    // lands in, the frame after the rewrap it causes, and once more after the
+    // browser column has finished settling — `applyBrowserVisibility` refits
+    // on its own schedule and that fit is the last one to touch the buffer.
+    const pin = () => entry.term.scrollToBottom();
+    requestAnimationFrame(pin);
+    requestAnimationFrame(() => requestAnimationFrame(pin));
+    setTimeout(pin, 60);
+  }
 }
 
 /**
@@ -2081,8 +2314,19 @@ let maximized = false;
  */
 let fullscreen = false;
 
+/**
+ * Match the window buttons to what the window can actually do.
+ *
+ * Maximise is not one of them in fullscreen. The window is already the whole
+ * screen, so the button either does nothing or does something confusing, and
+ * the glyph on it is a lie either way: the square says "make this bigger" when
+ * there is no bigger, and swapping it for the restore glyph says "put it back"
+ * when what puts it back is F11. A control with no meaningful state is better
+ * gone than mislabelled, and minimise and close both still mean what they say.
+ */
 function refreshMaxIcon() {
   els.winMaxIcon.setAttribute("href", maximized ? "#i-restore" : "#i-max");
+  els.app.classList.toggle("fullscreen", fullscreen);
 }
 
 async function toggleMaximize() {
@@ -2797,7 +3041,7 @@ function renderButtons() {
   // already does, and twice was once too many. The window title still does,
   // because that is what the taskbar reads.
   const active = infos.find((i) => i.id === activeId);
-  document.title = active ? `${displayName(active)} — hmux` : "hmux";
+  document.title = active ? `${displayName(active)} — Hmux` : "Hmux";
 }
 
 /** Guards against a second poll adopting the same terminal mid-attach. */
@@ -3390,16 +3634,50 @@ let updateFailed = "";
  */
 let updateTarget = null;
 
+/** A check that went wrong, in the same card the good news arrives in. */
+function updateFailedToast(what) {
+  showToast({
+    key: "update-failed",
+    title: "Could not check for updates",
+    body: what,
+    bad: true,
+    life: 8000,
+  });
+}
+
 async function checkForUpdate(explicit = false) {
   if (updateReady || updateInProgress) return;
   updateFailed = "";
+
+  // A build you compiled is never out of date. See `is_release_build`: the
+  // version lives in `Cargo.toml`, the workflow rewrites it just before
+  // compiling and never commits it back, so a working copy reports 0.1.0 and
+  // every release ever published looks newer than it. Offering that update is
+  // offering to overwrite the thing you are working on with the last one CI
+  // built, and the button for it says "Restart to update".
+  try {
+    if (!(await invoke("is_release_build"))) {
+      if (explicit) {
+        showToast({
+          key: "update-dev",
+          title: "This is a local build",
+          body: "Updates are only offered to builds from a release. Run install.ps1 without -FromBuild to go back to the published one.",
+          life: 6000,
+        });
+      }
+      return;
+    }
+  } catch {
+    // An older build has no such command. It is also, by definition, one that
+    // came from a release, since nothing else was shipping then.
+  }
 
   let current;
   try {
     current = await invoke("app_version");
   } catch (e) {
     updateFailed = `could not read this build's version: ${e}`;
-    if (explicit) showError("update", updateFailed);
+    if (explicit) updateFailedToast(updateFailed);
     return;
   }
 
@@ -3412,7 +3690,7 @@ async function checkForUpdate(explicit = false) {
     if (!response.ok) {
       if (response.status !== 404) {
         updateFailed = `GitHub answered ${response.status}`;
-        if (explicit) showError("update", updateFailed);
+        if (explicit) updateFailedToast(updateFailed);
       }
       return;
     }
@@ -3421,12 +3699,20 @@ async function checkForUpdate(explicit = false) {
     const tag = release.tag_name;
     if (!tag || !isNewer(tag, current)) return;
 
+    // The size travels with the address. GitHub has just told us how big each
+    // one is, and this is the only place that answer is free: asking the
+    // download host separately is three more round trips for a number already
+    // in hand, and a HEAD cannot answer it anyway — see `update_download`.
+    const assets = new Map(
+      (release.assets || []).map((a) => [
+        a.name,
+        { url: a.browser_download_url, size: a.size || 0 },
+      ])
+    );
+
     // A release missing any of the three is not installable — the window would
     // come back paired with a daemon it does not match, or with none at all.
     // Better to keep running the version that works and say nothing.
-    const assets = new Map(
-      (release.assets || []).map((a) => [a.name, a.browser_download_url])
-    );
     const missing = UPDATE_BINARIES.filter((n) => !assets.has(n));
     if (missing.length) {
       logInfo(`skipping ${tag}: it has no ${missing.join(", ")}`);
@@ -3439,7 +3725,7 @@ async function checkForUpdate(explicit = false) {
     // right failure for the six-hourly check: this is never why someone opened
     // a terminal. Someone who asked deserves an answer either way.
     updateFailed = String(e);
-    if (explicit) showError("update", `could not check: ${e}`);
+    if (explicit) updateFailedToast(String(e && e.message ? e.message : e));
   }
 }
 
@@ -3457,7 +3743,7 @@ async function checkForUpdate(explicit = false) {
 async function downloadUpdate(tag, current, assets) {
   updateInProgress = true;
   updateTarget = { tag, current };
-  showUpdateModal({ tag, current, phase: "downloading", percent: 0 });
+  showUpdateToast({ tag, current, phase: "downloading", percent: 0 });
 
   try {
     // Rust does the fetching. See `update_download`: the webview is not allowed
@@ -3465,11 +3751,11 @@ async function downloadUpdate(tag, current, assets) {
     // `Access-Control-Allow-Origin`, and the refusal arrives as the bare string
     // "Failed to fetch" with no clue in it.
     await invoke("update_download", {
-      assets: UPDATE_BINARIES.map((name) => ({ name, url: assets.get(name) })),
+      assets: UPDATE_BINARIES.map((name) => ({ name, ...assets.get(name) })),
     });
 
     updateReady = tag;
-    showUpdateModal({ tag, current, phase: "ready" });
+    showUpdateToast({ tag, current, phase: "ready" });
   } catch (e) {
     // Nothing has been swapped — staging is a separate directory — so the
     // running install is untouched and the next check will try again.
@@ -3479,9 +3765,14 @@ async function downloadUpdate(tag, current, assets) {
     // within a second, and asking again answered "you are on the newest
     // version", which was not true and was not what had happened.
     logInfo(`could not download ${tag}: ${e}`);
-    hideUpdateModal();
     updateFailed = String(e);
-    showError("update", `could not download ${tag}: ${e}`);
+    showToast({
+      key: "update-failed",
+      title: `Could not download ${tag}`,
+      body: String(e && e.message ? e.message : e),
+      bad: true,
+      life: 8000,
+    });
   } finally {
     updateInProgress = false;
     updateTarget = null;
@@ -3489,75 +3780,51 @@ async function downloadUpdate(tag, current, assets) {
 }
 
 /**
- * The dialogue.
+ * The update, as one card at the top of the terminal.
  *
- * Deliberately blocking, and deliberately not dismissible while the download
- * runs: the interesting sentence in it is the one about the terminals, and it
- * is only believable if it is said at the moment someone is deciding whether to
- * let the app restart.
+ * Not a dialogue and deliberately not blocking. Downloading is not a question,
+ * so nothing is asked while it happens and nothing is in the way of carrying
+ * on. The one moment the update needs an answer is the end of it, and that
+ * card stays until it gets one: the interesting sentence is the one about the
+ * terminals, and it is only worth anything read at the moment someone is
+ * deciding whether to let the app restart.
  */
-function showUpdateModal({ tag, current, phase, percent }) {
-  const el = els.updateModal;
-  const wasHidden = el.hidden;
-  el.hidden = false;
-
-  // Get the pages out of the way, once, on the way up.
-  //
-  // A native webview is not a DOM element and cannot be covered by one: it is
-  // a child surface painted over the window, so a scrim at any z-index is
-  // still underneath it. Without this the dialogue appears with a browser
-  // sitting on top of the half of it the button is in.
-  if (wasHidden) {
-    invoke("browser_layout", {
-      active: null,
-      x: 0,
-      y: 0,
-      width: 0,
-      height: 0,
-      force: true,
-    }).catch(() => {});
+function showUpdateToast({ tag, current, phase, percent }) {
+  if (phase === "downloading") {
+    showToast({
+      key: "update-download",
+      title: `Downloading Hmux ${tag}`,
+      body: `You are on ${current}. Your terminals keep running throughout.`,
+      percent: percent || 0,
+    });
+    return;
   }
 
-  const body =
-    phase === "downloading"
-      ? `<div class="update-progress">
-           <div class="update-bar"><span style="width:${percent || 0}%"></span></div>
-           <span class="update-pct">Downloading update… ${percent || 0}%</span>
-         </div>`
-      : `<button class="update-go" id="update-go">Restart to update</button>`;
-
-  el.innerHTML = `
-    <div class="update-card">
-      <h2>Update available</h2>
-      <p>
-        This is hmux ${current}, and ${tag} is out. Updating keeps this window
-        current — your terminals keep running the whole time.
-      </p>
-      ${body}
-    </div>`;
-
-  const go = document.getElementById("update-go");
-  if (go) {
-    go.onclick = async () => {
-      go.disabled = true;
-      go.textContent = "Restarting…";
-      try {
-        // Does not return: the new window is started and this process exits.
-        await invoke("update_apply");
-      } catch (e) {
-        showError("update", e);
-        hideUpdateModal();
-      }
-    };
-  }
-}
-
-function hideUpdateModal() {
-  els.updateModal.hidden = true;
-  els.updateModal.innerHTML = "";
-  // Put the page back where it was. Only reached when a download failed —
-  // applying the update ends the process instead.
-  pushBrowserBounds(true);
+  showToast({
+    key: "update-ready",
+    title: `Hmux ${tag} is ready`,
+    body: "Restarting swaps the window for the new one. Your terminals keep running the whole time.",
+    action: {
+      label: "Restart to update",
+      run: async (go) => {
+        go.disabled = true;
+        go.textContent = "Restarting…";
+        try {
+          // Does not return: the new window is started and this one exits.
+          await invoke("update_apply");
+        } catch (e) {
+          logInfo(`could not apply ${tag}: ${e}`);
+          showToast({
+            key: "update-failed",
+            title: "Could not install the update",
+            body: String(e && e.message ? e.message : e),
+            bad: true,
+            life: 8000,
+          });
+        }
+      },
+    },
+  });
 }
 
 // -------------------------------------------------------------- splitters
@@ -3809,15 +4076,13 @@ async function main() {
     }
     if (e.key === "F11") {
       e.preventDefault();
-      // The maximise icon is deliberately left alone. Fullscreen is a
-      // different state from maximised, the window is not maximised on the way
-      // out of it, and a restore glyph on a button that would not restore
-      // anything is worse than no feedback.
       invoke("window_toggle_fullscreen")
         .then((now) => {
           // The command answers with the state it ended up in, so the title bar
-          // knows whether it is still a drag surface.
+          // knows whether it is still a drag surface — and whether maximise is
+          // still a thing this window can be asked for. See `refreshMaxIcon`.
           fullscreen = now;
+          refreshMaxIcon();
           // Refit explicitly, and more than once.
           //
           // Going fullscreen gains exactly the height of the taskbar, about
@@ -3893,7 +4158,7 @@ async function main() {
     if (!updateInProgress || !updateTarget) return;
     const { received, total } = event.payload || {};
     if (!total) return;
-    showUpdateModal({
+    showUpdateToast({
       tag: updateTarget.tag,
       current: updateTarget.current,
       phase: "downloading",
@@ -4051,7 +4316,9 @@ async function main() {
   );
 
   await restoreOrStart();
-  // Starts closed unless the restored session had one open.
+  // Always closed — see `restoreTabs`. The markup already says so, so this
+  // agrees with what is on screen rather than changing it; it is here to wire
+  // the rest of the state that goes with a shut panel.
   applyBrowserVisibility();
 
   // Every terminal opens at the end of its output, not part way up it.

@@ -70,6 +70,28 @@ fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Whether this build came out of the release workflow.
+///
+/// The version a build reports is the one in `Cargo.toml`, and the workflow
+/// rewrites that file to `0.1.<run number>` immediately before compiling —
+/// deliberately, and without committing it back. So the number in the
+/// repository is `0.1.0` and it stays `0.1.0` in anything built from a working
+/// copy, which every published release is numerically newer than, forever.
+///
+/// The updater took that at face value, and it was right to: it cannot tell a
+/// developer's build from a genuinely ancient one by looking at the number. So
+/// a local build offered "an update", and taking it replaced the binary you had
+/// just compiled with the last one CI published — silently undoing an
+/// afternoon's work in the one click that looked most like progress.
+///
+/// The workflow sets `HMUX_RELEASE`; nothing else does. A build without it is
+/// somebody's own, and the newest release is not an upgrade on it whatever the
+/// numbers say.
+#[tauri::command]
+fn is_release_build() -> bool {
+    option_env!("HMUX_RELEASE").is_some()
+}
+
 /// Open a link in the machine's own browser, outside this window.
 ///
 /// Almost nothing here should do this — a link clicked in a terminal belongs in
@@ -118,24 +140,6 @@ fn account_name() -> String {
 // calling the window API directly because the chrome is a *child* webview:
 // a command reaches the window it belongs to without depending on what the
 // multiwebview build injects into it.
-
-/// Match the chrome webview to the window it is inside.
-///
-/// The window is asked how big it is rather than the event being believed:
-/// maximising fires several resize events in a burst and they do not all carry
-/// the size the window ended up at.
-fn sync_ui_size(window: &tauri::Window) {
-    let Ok(size) = window.inner_size() else {
-        return;
-    };
-    let Ok(scale) = window.scale_factor() else {
-        return;
-    };
-    let logical = size.to_logical::<f64>(scale);
-    if let Some(ui) = window.get_webview("ui") {
-        let _ = ui.set_size(LogicalSize::new(logical.width, logical.height));
-    }
-}
 
 fn main_window(app: &tauri::AppHandle) -> Result<tauri::Window, String> {
     app.get_window("main")
@@ -675,6 +679,7 @@ fn main() {
             browser_url,
             ui_log,
             app_version,
+            is_release_build,
             account_name,
             open_external,
             window_minimize,
@@ -726,7 +731,7 @@ fn main() {
             // edges still works — an undecorated window keeps its frame, it
             // just stops painting a caption.
             let window = WindowBuilder::new(app, "main")
-                .title("hmux")
+                .title("Hmux")
                 .decorations(false)
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(900.0, 520.0)
@@ -762,7 +767,13 @@ fn main() {
                     // inside it forty-eight pixels short.
                     //
                     // Auto-resize is the same job done from inside, where the
-                    // new size is known rather than polled for.
+                    // new size is known rather than polled for. It is also the
+                    // only thing allowed to size this webview: the hand-rolled
+                    // handler was left wired up alongside it for a while, and
+                    // two writers means the stale one lands last. Fullscreen
+                    // from an ordinary window then left the page at the size it
+                    // had before, a window-and-a-bit of black around a chrome
+                    // that had not moved.
                     .auto_resize(),
                 LogicalPosition::new(0.0, 0.0),
                 LogicalSize::new(logical.width, logical.height),
@@ -785,15 +796,11 @@ fn main() {
                 }
             }
 
-            // Keep the chrome webview matched to the window. Browsers are
-            // repositioned by the UI, which recomputes its own layout.
-            let resize_handle = window.clone();
-            window.on_window_event(move |event| {
-                if !matches!(event, tauri::WindowEvent::Resized(_)) {
-                    return;
-                }
-                sync_ui_size(&resize_handle);
-            });
+            // Nothing here resizes the chrome webview. `auto_resize` above is
+            // what keeps it matched to the window, and a second opinion is not
+            // a safety net — it is the stale one winning. See the note on the
+            // builder for why the polled size cannot be trusted at the moment
+            // a resize event arrives.
 
             // Ask the daemon what everything is doing, on a timer.
             //
