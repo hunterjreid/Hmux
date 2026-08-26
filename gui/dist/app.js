@@ -1373,14 +1373,17 @@ function makeTerminal(id, initial = null) {
   term.open(view);
 
   /**
-   * Right click: a menu, with Copy and Paste written on it.
+   * Right click pastes. That is the whole gesture.
    *
-   * This used to be a silent gesture — copy when something was selected, paste
-   * when nothing was — on the grounds that it is what a terminal on Windows
-   * does. It is, and it is also invisible: the two things right-click can do
-   * are only ever learned by right-clicking twice and noticing. The menu says
-   * them out loud, and greys Copy out rather than dropping the row, so that
-   * "nothing is selected" is something you can read instead of infer.
+   * It has been two other things. A silent copy-when-something-is-selected,
+   * paste-when-nothing-is, which is what a terminal on Windows traditionally
+   * does and which does whichever of the two you did not just decide you
+   * wanted. Then a menu naming both, which is honest and is also two clicks and
+   * a read for something done fifty times an hour.
+   *
+   * Both were trying to fit two jobs onto one button. Paste is the one worth
+   * having there, so it is the only one there, and it does the same thing every
+   * time whether or not anything is selected. Copy is Ctrl+Shift+C, below.
    *
    * The paste goes through xterm rather than straight down the pty, which
    * matters more than it looks: a shell with bracketed paste on — every one of
@@ -1390,67 +1393,15 @@ function makeTerminal(id, initial = null) {
    * first. `term.paste` wraps it or does not, according to the mode the shell
    * actually set.
    */
-  // What was selected when the right button went down.
-  //
-  // Read on mousedown rather than in the context menu handler, because by the
-  // time that fires the selection may already be gone: a press inside the
-  // terminal is a press as far as the emulator is concerned, and clearing the
-  // selection on it is reasonable behaviour that happens to land between the
-  // two events. Right-clicking a selection then pasted over it instead of
-  // copying it, which is the worst possible way to get that wrong.
-  let selectionAtPress = "";
-  view.addEventListener(
-    "mousedown",
-    (e) => {
-      if (e.button === 2) selectionAtPress = term.getSelection();
-    },
-    true
-  );
-
-  view.addEventListener("contextmenu", (e) => {
+  view.addEventListener("contextmenu", async (e) => {
     e.preventDefault();
-
-    // Captured now, when the menu is built, rather than read again inside
-    // Copy. The click that chooses an item is a click in the window, and by
-    // the time it arrives the selection it was about may already be gone.
-    const selection = term.getSelection() || selectionAtPress;
-    selectionAtPress = "";
-
-    openContextMenu(e.clientX, e.clientY, [
-      {
-        label: "Copy",
-        disabled: !selection,
-        action: async () => {
-          try {
-            await invoke("clipboard_write", { text: selection });
-          } catch (err) {
-            showError("copy", err);
-          }
-          term.clearSelection();
-          term.focus();
-        },
-      },
-      {
-        label: "Paste",
-        action: async () => {
-          try {
-            const text = await invoke("clipboard_read");
-            if (text) term.paste(text);
-          } catch (err) {
-            showError("paste", err);
-          }
-          term.focus();
-        },
-      },
-      null,
-      {
-        label: "Select all",
-        action: () => {
-          term.selectAll();
-          term.focus();
-        },
-      },
-    ]);
+    try {
+      const text = await invoke("clipboard_read");
+      if (text) term.paste(text);
+    } catch (err) {
+      showError("paste", err);
+    }
+    term.focus();
   });
 
   // Before a single byte of the replay lands. Opening sizes the terminal to a
@@ -1479,6 +1430,31 @@ function makeTerminal(id, initial = null) {
   // the shell's, and taking it would be a worse trade than a longer chord.
   term.attachCustomKeyEventHandler((e) => {
     if (e.ctrlKey && e.shiftKey && (e.key === "L" || e.key === "l")) return false;
+
+    // Copy, since right-click no longer offers it.
+    //
+    // Ctrl+C cannot be the one: it is the interrupt, and a terminal that
+    // cannot stop a running command the way every other terminal does is
+    // broken in a much more expensive way than one with an awkward copy. So
+    // Ctrl+Shift+C, which is where every terminal on Windows keeps it for
+    // exactly this reason.
+    //
+    // Handled here rather than in the window's key handler because it needs
+    // this terminal's selection, and returning false is what stops the chord
+    // reaching the shell as well. Guarded on keydown because xterm runs this
+    // for keypress too, and one clipboard write is enough.
+    if (e.ctrlKey && e.shiftKey && (e.key === "C" || e.key === "c")) {
+      if (e.type === "keydown") {
+        const selection = term.getSelection();
+        if (selection) {
+          invoke("clipboard_write", { text: selection }).catch((err) =>
+            showError("copy", err)
+          );
+        }
+      }
+      return false;
+    }
+
     // F11 belongs to the window, not the shell. Returning false keeps xterm
     // from forwarding it down the pty, and the window handler still sees it.
     // Almost nothing in a terminal binds F11, and a fullscreen key that only
