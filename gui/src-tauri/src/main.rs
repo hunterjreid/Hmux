@@ -438,8 +438,22 @@ fn close_terminal(
 ///
 /// Also what subscribes this window to the terminal's live output, which is why
 /// it is asked for even when the window already knows it has nothing.
+/// `async` for the same reason the lock is dropped below: this waits, and a
+/// command that waits must not be one Tauri runs on the main thread.
+///
+/// A plain `fn` command is called on the main thread, so the fifteen seconds
+/// this can spend waiting for a reply were fifteen seconds the window was not
+/// pumping messages — Windows paints the title bar "(Not Responding)" and the
+/// whole app is frozen, terminals and all. Nothing in the wait needs the main
+/// thread; it needs a reply from another process.
+///
+/// The timeout is not a hypothetical. A window that attaches to a terminal the
+/// daemon no longer has waits the full fifteen for a reply that cannot come,
+/// three times over, and a few of those stacked up is the freeze that reads as
+/// the app being about to die. `closed` on the JavaScript side is what stops it
+/// being asked in the first place; this is what stops the asking being fatal.
 #[tauri::command]
-fn terminal_backlog(
+async fn terminal_backlog(
     state: tauri::State<'_, Mutex<Sessions>>,
     id: SessionId,
 ) -> Result<sessions::Backlog, String> {

@@ -2437,6 +2437,21 @@ async function openInBrowserPanel(id, url) {
     return;
   }
 
+  // Bring the page you just opened to the front.
+  //
+  // `addTab` makes the new tab this terminal's active one, but that is this
+  // window's own bookkeeping: which webview is actually over the slot is
+  // Rust's, and it changes only when it is told. Told here, because nothing
+  // else on this path does — the slide only runs when the panel was shut, so
+  // a link clicked with the panel already open opened its tab, moved the
+  // highlight in the strip, and left the previous page on screen. The strip
+  // said one thing and the panel showed another, and the page you asked for
+  // was the one you could not see.
+  //
+  // Before navigating rather than after, so the new page is the one you watch
+  // load.
+  pushBrowserBounds(true);
+
   els.url.value = url;
   await go();
 }
@@ -2651,13 +2666,56 @@ let railIds = [];
  * A tombstone rather than a synchronous close: making the close wait for the
  * daemon would put the fifteen seconds on the click instead of after it.
  *
- * Cleared as soon as the daemon stops reporting the id, so an id it reuses
- * after a restart is not left permanently unopenable.
+ * Lifted once several listings in a row agree the terminal is gone, rather than
+ * on the first one that leaves it out — which is what let all of the above
+ * happen anyway. `list_terminals` answers from a cached list the daemon
+ * refreshes by event, and the `terminals` event is pushed rather than asked
+ * for, so a snapshot taken before the close can arrive after one taken after
+ * it. The first listing without the id lifted the tombstone; the stale one
+ * behind it still had the id, found no tombstone in its way, and adopted a
+ * terminal that no longer existed. One listing is not evidence of anything
+ * here, and a listing that still names the terminal puts the count back to
+ * nothing, so a straggler can only ever delay the lifting rather than defeat
+ * it.
+ *
+ * Lifted at all only because the daemon's ids start again when it does. Within
+ * one daemon they are a counter that is incremented and never reused, so a
+ * closed id can never legitimately come back and being slow about this costs
+ * nothing.
  */
-const closed = new Set();
+const closed = new Map();
+
+/**
+ * How many listings in a row have to leave a closed terminal out before its
+ * tombstone goes. Three, because the thing being outlasted is a queue rather
+ * than a clock, and a count needs no guess about how far behind it can be.
+ */
+const CLOSED_AGREED = 3;
+
+/**
+ * Update the tombstones against one listing, and lift the ones it has outlived.
+ *
+ * Split out because it is the whole of the rule, and a rule about a race is
+ * worth being able to drive directly rather than only through the thing that
+ * calls it.
+ */
+function forgetClosed(infos) {
+  for (const [id, agreed] of closed) {
+    if (infos.some((i) => i.id === id)) {
+      // Still listed. Either the close has not been processed yet or this
+      // snapshot predates it, and there is no way to tell which from here, so
+      // the count starts again either way.
+      closed.set(id, 0);
+    } else if (agreed + 1 >= CLOSED_AGREED) {
+      closed.delete(id);
+    } else {
+      closed.set(id, agreed + 1);
+    }
+  }
+}
 
 async function closeTerminal(id) {
-  closed.add(id);
+  closed.set(id, 0);
   await invoke("close_terminal", { id }).catch(console.error);
   const entry = terminals.get(id);
   if (entry) {
@@ -3311,12 +3369,11 @@ async function refresh() {
 function applyInfos(infos) {
   const now = performance.now();
 
-  // A terminal the daemon has stopped listing is closed as far as both sides
-  // are concerned, so its tombstone has done its job. Done before adoption, or
-  // an id would stay blocked for one refresh longer than it needs to be.
-  for (const id of closed) {
-    if (!infos.some((i) => i.id === id)) closed.delete(id);
-  }
+  // A terminal several listings in a row have stopped naming is closed as far
+  // as both sides are concerned, so its tombstone has done its job. Done
+  // before adoption, or an id would stay blocked for one refresh longer than
+  // it needs to be.
+  forgetClosed(infos);
 
   // Take on anything the daemon has that this window does not.
   //
