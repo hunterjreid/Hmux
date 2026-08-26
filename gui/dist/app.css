@@ -1131,6 +1131,19 @@ body {
   background: var(--accent-dim);
 }
 
+/* A row that is there to be read rather than pressed — Copy with nothing
+   selected. It keeps its place in the menu so the list does not change shape
+   between one right-click and the next, and drops the hover so that nothing
+   about it invites the click. */
+.menu button:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.menu button:disabled:hover {
+  background: transparent;
+}
+
 /* Settings. Anchored under the gear rather than at the pointer, because it is
    opened from a button that is always in the same place. */
 .menu.settings {

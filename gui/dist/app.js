@@ -1373,12 +1373,14 @@ function makeTerminal(id, initial = null) {
   term.open(view);
 
   /**
-   * Right click: copy what is selected, or paste when nothing is.
+   * Right click: a menu, with Copy and Paste written on it.
    *
-   * The two halves are one gesture because that is what a terminal on Windows
-   * does, and because the alternative is a menu for two items you always know
-   * which of you want. Selecting then right-clicking takes the text; clicking
-   * with nothing selected puts the clipboard in.
+   * This used to be a silent gesture — copy when something was selected, paste
+   * when nothing was — on the grounds that it is what a terminal on Windows
+   * does. It is, and it is also invisible: the two things right-click can do
+   * are only ever learned by right-clicking twice and noticing. The menu says
+   * them out loud, and greys Copy out rather than dropping the row, so that
+   * "nothing is selected" is something you can read instead of infer.
    *
    * The paste goes through xterm rather than straight down the pty, which
    * matters more than it looks: a shell with bracketed paste on — every one of
@@ -1405,31 +1407,50 @@ function makeTerminal(id, initial = null) {
     true
   );
 
-  view.addEventListener("contextmenu", async (e) => {
+  view.addEventListener("contextmenu", (e) => {
     e.preventDefault();
 
+    // Captured now, when the menu is built, rather than read again inside
+    // Copy. The click that chooses an item is a click in the window, and by
+    // the time it arrives the selection it was about may already be gone.
     const selection = term.getSelection() || selectionAtPress;
     selectionAtPress = "";
-    if (selection) {
-      try {
-        await invoke("clipboard_write", { text: selection });
-      } catch (err) {
-        showError("copy", err);
-      }
-      // Cleared so the next right click pastes. Leaving it selected makes the
-      // button do the same thing twice and never the other one.
-      term.clearSelection();
-      term.focus();
-      return;
-    }
 
-    try {
-      const text = await invoke("clipboard_read");
-      if (text) term.paste(text);
-    } catch (err) {
-      showError("paste", err);
-    }
-    term.focus();
+    openContextMenu(e.clientX, e.clientY, [
+      {
+        label: "Copy",
+        disabled: !selection,
+        action: async () => {
+          try {
+            await invoke("clipboard_write", { text: selection });
+          } catch (err) {
+            showError("copy", err);
+          }
+          term.clearSelection();
+          term.focus();
+        },
+      },
+      {
+        label: "Paste",
+        action: async () => {
+          try {
+            const text = await invoke("clipboard_read");
+            if (text) term.paste(text);
+          } catch (err) {
+            showError("paste", err);
+          }
+          term.focus();
+        },
+      },
+      null,
+      {
+        label: "Select all",
+        action: () => {
+          term.selectAll();
+          term.focus();
+        },
+      },
+    ]);
   });
 
   // Before a single byte of the replay lands. Opening sizes the terminal to a
@@ -1438,12 +1459,6 @@ function makeTerminal(id, initial = null) {
   if (initial && initial.cols > 0 && initial.rows > 0) {
     term.resize(initial.cols, initial.rows);
   }
-
-  // Output is the only thing that can put lines above the viewport, and this
-  // is the hook that fires when any lands.
-  term.onRender(() => {
-    if (id === activeId) refreshScrollbackState();
-  });
 
   // Every keystroke goes straight to the pty. No local echo — the shell echoes.
   //
@@ -1505,7 +1520,88 @@ function makeTerminal(id, initial = null) {
     browserOpen: false,
     // Set by renaming. Overrides whatever the shell calls itself.
     customName: null,
+    // Whether this terminal is following its own output.
+    //
+    // The reader's intention, held as a fact, rather than a guess made from
+    // where the viewport happens to be sitting at the moment somebody asks.
+    // Those two used to be the same thing and are not: xterm decides whether
+    // to follow the end from an `isUserScrolling` flag it sets whenever the
+    // scroll element reports a smaller offset than it had, and a reflow that
+    // shortens the scroll area makes the browser report exactly that. So a
+    // refit — a window resize, a splitter drag, the browser panel opening,
+    // arriving at a terminal that had been sized for a different layout —
+    // could latch "the user has scrolled up" on a terminal nobody had touched.
+    // From then on its output piled up below a viewport that never moved, and
+    // switching to it landed part way up an hour of history: the random
+    // position. Nothing in the buffer says which of the two happened, so the
+    // gestures that mean "I am reading back" are recorded as they arrive and
+    // this is what they set. See `claimedAt`.
+    follow: true,
+    // When the reader last did something that decides where this view sits.
+    claimedAt: 0,
+    // Whether a mouse button went down on this terminal and has not come up.
+    // A scrollbar drag is one gesture however long it takes, and the whole of
+    // it has to count as the reader's, or the second half gets fought.
+    dragging: false,
+    // Bookkeeping for `pinSoon`.
+    pinQueued: false,
+    pinTries: 0,
+    pinAt: -1,
   };
+
+  // Output lands above the viewport, and the viewport is dragged around by
+  // things that are not the reader. One hook answers both.
+  term.onRender(() => {
+    const b = term.buffer.active;
+    if (b.viewportY >= b.baseY) {
+      // At the end, however it got there — output arriving, a scroll back
+      // down, typing at the prompt, a buffer short enough to have no history
+      // at all. Following is what this terminal is doing now.
+      entry.follow = true;
+      entry.pinTries = 0;
+    } else if (readerDriving(entry)) {
+      // Off the end, with a gesture behind it. This is somebody reading.
+      entry.follow = false;
+    } else if (entry.follow) {
+      // Off the end with nothing to explain it: a reflow moved the view out
+      // from under a terminal that was following. Put it back.
+      pinSoon(entry);
+    }
+    if (id === activeId) refreshScrollbackState();
+  });
+
+  // What counts as the reader deciding where the view sits.
+  //
+  // Every one of these is captured rather than caught, so a handler that stops
+  // the event on its way down — Ctrl+wheel is the zoom, not a scroll — never
+  // reaches here and is never mistaken for scrolling. `mousedown` covers both
+  // scrollbars, xterm's own and the browser's, and the drag-past-the-edge that
+  // selecting text does; Chromium reports a press on a native scrollbar as a
+  // press on the element it belongs to.
+  const claim = () => {
+    entry.claimedAt = performance.now();
+  };
+  view.addEventListener("wheel", claim, { capture: true, passive: true });
+  // The only two keys that move this view. Everything else on the keyboard is
+  // typing, and typing is the opposite claim: `scrollOnUserInput` has already
+  // put the view back at the end by the time the key is handled. Counting
+  // Enter as "I am reading back" would let a command whose output floods and
+  // reflows in the same instant look like a decision to leave the end.
+  view.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.shiftKey && (e.key === "PageUp" || e.key === "PageDown")) claim();
+    },
+    true
+  );
+  view.addEventListener(
+    "mousedown",
+    () => {
+      entry.dragging = true;
+      claim();
+    },
+    true
+  );
 
   // Programs announce what they are doing through the window title; showing it
   // is free and often says more than the process name can.
@@ -1542,6 +1638,7 @@ function goLive(entry) {
   // A restored terminal opens at the prompt, not part way up last week's
   // output. Queued behind the writes above, which is when the buffer has its
   // final length.
+  entry.follow = true;
   entry.term.write("", () => entry.term.scrollToBottom());
 }
 
@@ -1772,6 +1869,80 @@ function resizeQuiet() {
 const resizeTimers = new Map();
 
 /**
+ * How long after a gesture the view still belongs to the reader.
+ *
+ * Long enough to outlast the smooth scroll a single notch of the wheel starts,
+ * which is what puts several frames between the gesture and the position it
+ * settles on. Short enough that a click to focus a terminal is not still
+ * speaking for it by the time the next reflow lands.
+ */
+const CLAIM_MS = 400;
+
+/** Whether the reader, rather than the layout, is deciding where this view sits. */
+function readerDriving(entry) {
+  return entry.dragging || performance.now() - entry.claimedAt < CLAIM_MS;
+}
+
+/**
+ * How many frames to spend putting a following terminal back before giving up.
+ *
+ * A pin that cannot land must not become a pin attempted every frame for the
+ * rest of the session. Fresh output resets the count, so this only ends the
+ * case where nothing is changing and nothing is working.
+ */
+const PIN_GIVE_UP = 30;
+
+/**
+ * Put a following terminal back on its last line, at most once a frame.
+ *
+ * Deferred rather than done on the spot because the thing that moved the view
+ * usually has not finished: `scrollToBottom` is measured against the scroll
+ * element's height, and after a reflow that height is a frame behind the buffer
+ * it describes. Asking on the next frame asks a layout that exists.
+ */
+function pinSoon(entry) {
+  if (!entry.follow || entry.pinQueued) return;
+  entry.pinQueued = true;
+  requestAnimationFrame(() => {
+    entry.pinQueued = false;
+    if (!entry.follow) return;
+    const b = entry.term.buffer.active;
+    if (b.viewportY >= b.baseY) {
+      entry.pinTries = 0;
+      return;
+    }
+    if (b.baseY !== entry.pinAt) {
+      entry.pinAt = b.baseY;
+      entry.pinTries = 0;
+    }
+    if (entry.pinTries >= PIN_GIVE_UP) return;
+    entry.pinTries++;
+    entry.term.scrollToBottom();
+  });
+}
+
+/**
+ * The same, for the moments that take more than one frame to settle.
+ *
+ * Arriving at a terminal is not one reflow: the fit that runs the instant it
+ * appears is followed by the panel state and the column widths for that
+ * terminal, and `applyBrowserVisibility` refits again on its own schedule.
+ * Every one of those rewraps a scrollback that can be fifty thousand lines and
+ * moves where the bottom is. So the end is asked for at each of the moments it
+ * can have moved, rather than once and hopefully.
+ */
+function pinBottom(entry) {
+  if (!entry.follow) return;
+  const pin = () => {
+    if (entry.follow) entry.term.scrollToBottom();
+  };
+  pin();
+  requestAnimationFrame(pin);
+  requestAnimationFrame(() => requestAnimationFrame(pin));
+  setTimeout(pin, 60);
+}
+
+/**
  * Do something that changes a terminal's width, and keep the reader's place.
  *
  * Narrowing a terminal re-wraps every long line, so the same text occupies more
@@ -1802,7 +1973,13 @@ function preservingView(entry, change) {
   // and the no-marker branch scrolled to the bottom. So scrolling up and then
   // touching anything that refits threw you to the end of the buffer: the
   // further back you were, the more likely it was to happen.
-  const atBottom = buffer.viewportY >= buffer.baseY;
+  //
+  // `follow` is asked first, and it is the answer even when the viewport says
+  // otherwise. A terminal that is following can already have been dragged off
+  // the end by an earlier reflow — that is the bug it exists to fix — and
+  // reading the viewport here would take that displacement as a place worth
+  // preserving and anchor it in, one reflow deepening the last.
+  const atBottom = entry.follow || buffer.viewportY >= buffer.baseY;
   const wasAt = buffer.viewportY;
 
   let anchor = null;
@@ -1824,7 +2001,15 @@ function preservingView(entry, change) {
       // reflow moves that. xterm does not quite keep the viewport pinned
       // through a resize, so this is what stops the prompt you are typing at
       // sitting just above the fold.
+      //
+      // Twice, because the reflow is not finished here. The scroll element is
+      // measured from a layout that has not been through the browser yet, so
+      // this attempt is against yesterday's height; the queued one runs when
+      // the number is real. The scroll event the shortened area fires arrives
+      // later still, and is exactly what used to latch xterm into thinking the
+      // reader had scrolled up — the second pin is what unlatches it.
       entry.term.scrollToBottom();
+      pinSoon(entry);
     } else if (anchor && anchor.line >= 0) {
       entry.term.scrollToLine(anchor.line);
     } else {
@@ -2000,22 +2185,6 @@ async function selectTerminal(id) {
   const entry = terminals.get(id);
   entry.unread = 0;
 
-  // Whether this terminal was at the end, read before anything below can move
-  // it — the same question the wheel handler asks for the same reason.
-  //
-  // Arriving at a terminal is not one reflow either. `fitTerminal` skips
-  // anything not on screen, so a hidden terminal keeps whatever size it had
-  // when it was last looked at, however much the window has changed since; the
-  // fit that runs the instant it appears is therefore the big one, and the
-  // panel state and column widths for this terminal land around it. Every one
-  // of those rewraps a scrollback that can be fifty thousand lines, and
-  // `preservingView` can only hold a position it was told before the rewrap it
-  // is wrapping — not the one after. So a terminal left sitting at its prompt
-  // came back somewhere near the top of its own history, which is the one place
-  // it certainly was not.
-  const buffer = entry.term.buffer.active;
-  const wasAtBottom = buffer.viewportY >= buffer.baseY;
-
   // Restore whatever this terminal had beside it, then bring its own browser
   // forward and park the others.
   const showing = activeTab(entry);
@@ -2027,16 +2196,16 @@ async function selectTerminal(id) {
   entry.term.focus();
   renderButtons();
 
-  if (wasAtBottom) {
-    // Three times, for the three moments this can be undone: the frame the fit
-    // lands in, the frame after the rewrap it causes, and once more after the
-    // browser column has finished settling — `applyBrowserVisibility` refits
-    // on its own schedule and that fit is the last one to touch the buffer.
-    const pin = () => entry.term.scrollToBottom();
-    requestAnimationFrame(pin);
-    requestAnimationFrame(() => requestAnimationFrame(pin));
-    setTimeout(pin, 60);
-  }
+  // Whether this terminal was at the end is not read off the viewport here.
+  //
+  // It cannot be. The terminal you are arriving at has spent its time hidden,
+  // and hidden is where a view drifts: it was refitted to follow the visible
+  // one, the panel beside it opened and shut, the window changed size, and any
+  // of those can leave xterm convinced somebody scrolled it up. Asking the
+  // viewport gets the answer for what those did rather than for what you did,
+  // which is a terminal you left at its prompt coming back part way up an hour
+  // of history. `follow` is the answer to the question actually being asked.
+  pinBottom(entry);
 }
 
 /**
@@ -2669,6 +2838,54 @@ function closeRowMenu() {
 }
 
 /**
+ * Build the context menu at the pointer and show it.
+ *
+ * One menu element for every right-click in the window, so two can never be
+ * open at once and the close-on-click, Escape and blur handlers already wired
+ * to it cover any new caller without being told about it.
+ *
+ * An entry is `{label, action, danger, disabled}`; a null entry is a
+ * separator. A disabled entry is still drawn, because a row that is greyed out
+ * says why nothing will happen, and a row that is absent says nothing at all.
+ */
+function openContextMenu(x, y, items) {
+  const menu = els.rowMenu;
+  menu.innerHTML = "";
+
+  for (const spec of items) {
+    if (!spec) {
+      const separator = document.createElement("div");
+      separator.className = "sep";
+      menu.appendChild(separator);
+      continue;
+    }
+
+    const button = document.createElement("button");
+    button.textContent = spec.label;
+    if (spec.danger) button.className = "danger";
+    if (spec.disabled) {
+      button.disabled = true;
+    } else {
+      button.onclick = (e) => {
+        e.stopPropagation();
+        closeRowMenu();
+        spec.action();
+      };
+    }
+    menu.appendChild(button);
+  }
+
+  // Shown before measuring, since a hidden element has no size, then nudged
+  // back inside the window if it would hang off an edge.
+  menu.hidden = false;
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+  const box = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - box.width - 6))}px`;
+  menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - box.height - 6))}px`;
+}
+
+/**
  * Right-click on a terminal in the rail.
  *
  * Lives at the top level of the document rather than inside the row, because
@@ -2760,54 +2977,41 @@ function openRowMenu(id, x, y) {
   const entry = terminals.get(id);
   if (!entry) return;
 
-  const menu = els.rowMenu;
-  menu.innerHTML = "";
-
-  const item = (label, action, danger) => {
-    const button = document.createElement("button");
-    button.textContent = label;
-    if (danger) button.className = "danger";
-    button.onclick = (e) => {
-      e.stopPropagation();
-      closeRowMenu();
-      action();
-    };
-    menu.appendChild(button);
-  };
-
-  item("Rename", async () => {
-    // After selecting, so the row is certainly there and certainly the one
-    // being looked at. Its label is found in the freshly built rail rather
-    // than captured before, which would be a reference to a discarded node.
-    await selectTerminal(id);
-    const row = [...els.list.children].find((r) => r.dataset.id === String(id));
-    const label = row && row.querySelector(".name");
-    if (label) beginRename(id, label);
-  });
-
-  item(pinned.has(id) ? "Unpin" : "Pin to top", () => togglePinned(id));
-
-  item(entry.browserOpen ? "Hide browser" : "Show browser", async () => {
-    await selectTerminal(id);
-    toggleBrowser();
-  });
-
-  const separator = document.createElement("div");
-  separator.className = "sep";
-  menu.appendChild(separator);
-
-  item("Close terminal", () => {
-    closeTerminal(id).catch((e) => showError("close terminal", e));
-  }, true);
-
-  // Shown before measuring, since a hidden element has no size, then nudged
-  // back inside the window if it would hang off an edge.
-  menu.hidden = false;
-  menu.style.left = "0px";
-  menu.style.top = "0px";
-  const box = menu.getBoundingClientRect();
-  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - box.width - 6))}px`;
-  menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - box.height - 6))}px`;
+  openContextMenu(x, y, [
+    {
+      label: "Rename",
+      action: async () => {
+        // After selecting, so the row is certainly there and certainly the one
+        // being looked at. Its label is found in the freshly built rail rather
+        // than captured before, which would be a reference to a discarded node.
+        await selectTerminal(id);
+        const row = [...els.list.children].find(
+          (r) => r.dataset.id === String(id)
+        );
+        const label = row && row.querySelector(".name");
+        if (label) beginRename(id, label);
+      },
+    },
+    {
+      label: pinned.has(id) ? "Unpin" : "Pin to top",
+      action: () => togglePinned(id),
+    },
+    {
+      label: entry.browserOpen ? "Hide browser" : "Show browser",
+      action: async () => {
+        await selectTerminal(id);
+        toggleBrowser();
+      },
+    },
+    null,
+    {
+      label: "Close terminal",
+      danger: true,
+      action: () => {
+        closeTerminal(id).catch((e) => showError("close terminal", e));
+      },
+    },
+  ]);
 }
 
 function renderButtons() {
@@ -4244,6 +4448,24 @@ async function main() {
     }).observe(els.host);
   }
 
+  // A drag that started on a terminal ends wherever the pointer got to, which
+  // for a scrollbar flung at the top of the window is not over the terminal at
+  // all. One listener rather than one per terminal, because terminals close
+  // and a window listener holding a closed one alive is a leak.
+  window.addEventListener(
+    "mouseup",
+    () => {
+      for (const entry of terminals.values()) {
+        if (!entry.dragging) continue;
+        entry.dragging = false;
+        // The moment the button comes up is still the reader's; a smooth
+        // scroll started by the drag is still arriving.
+        entry.claimedAt = performance.now();
+      }
+    },
+    true
+  );
+
   // Ctrl+scroll to resize the text. The whole font UI, and it adds no chrome.
   //
   // Captured on the way down rather than caught on the way up. The terminal's
@@ -4266,30 +4488,19 @@ async function main() {
         28,
         Math.max(8, fontSizeFor(activeId) + (e.deltaY < 0 ? 1 : -1))
       );
-      // Whether you were at the end, read before anything changes.
-      //
-      // Changing the font size is not one reflow. xterm recalculates the cell
-      // dimensions, the fit that follows changes the column count, and the
-      // rewrap those cause finishes after this handler has returned. Anything
-      // that asks "are we at the bottom" partway through that gets the answer
-      // for a layout that is already gone, and `preservingView` then faithfully
-      // holds a position nobody chose — which is the view jumping half a screen
-      // up on every notch of the wheel.
-      const buffer = entry.term.buffer.active;
-      const wasAtBottom = buffer.viewportY >= buffer.baseY;
-
       rememberFontSize(activeId, size);
       entry.term.options.fontSize = size;
       syncSize(activeId);
 
-      if (wasAtBottom) {
-        // Twice: once for the frame the fit lands in, and once after the
-        // rewrap that follows it. The second is what actually holds, and the
-        // first is what stops the view visibly leaving and coming back.
-        const pin = () => entry.term.scrollToBottom();
-        requestAnimationFrame(pin);
-        setTimeout(pin, 60);
-      }
+      // Changing the font size is not one reflow. xterm recalculates the cell
+      // dimensions, the fit that follows changes the column count, and the
+      // rewrap those cause finishes after this handler has returned. Asking
+      // "are we at the bottom" partway through that gets the answer for a
+      // layout that is already gone, and `preservingView` then faithfully
+      // holds a position nobody chose — which is the view jumping half a
+      // screen up on every notch of the wheel. `follow` is the same answer at
+      // every point in that sequence, because it is not a measurement.
+      pinBottom(entry);
     },
     { passive: false, capture: true }
   );

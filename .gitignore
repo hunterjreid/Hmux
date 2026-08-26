@@ -2,3 +2,7 @@
 gui/node_modules/
 gui/src-tauri/gen/
 gui/app-icon.png
+
+# Which tools this machine has agreed to let an agent run. A local decision,
+# not a property of the project. The skills beside it are checked in.
+.claude/settings.local.json
