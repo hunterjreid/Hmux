@@ -1695,11 +1695,43 @@ function toFileUrl(path) {
 /**
  * What counts as a link in terminal output.
  *
- * The bare-path pattern is lazy and has to end on a file extension followed by
- * whitespace or punctuation. Windows paths contain spaces often enough that a
- * greedy match would swallow the rest of the sentence after the filename, and
- * requiring an extension is what lets it know where the path stopped.
+ * The hard one is a bare Windows path, because the two things that end it are
+ * both ambiguous. Windows filenames contain spaces, so a space cannot end a
+ * path; and a path does not have to name a file, so an extension cannot be
+ * required to end one either.
+ *
+ * The old pattern required an extension and let anything at all come before
+ * it, lazily. That is wrong in both directions at once. A directory — `C:\dir\`
+ * — has no extension, so the match kept going through whatever followed it
+ * until it found any dot with two to six characters after it, which in
+ * `C:\...\qwen3-hf-files\ (Explorer's open), 2.05 GB total:` is the `.05` of a
+ * file size. Sixty characters of prose became one link. And in the other
+ * direction `.safetensors` is eleven characters, so a real path to a real file
+ * was not a link at all.
+ *
+ * What ends a path is a structural fact rather than a guess: **no segment of a
+ * path begins with a space.** `My Document.txt` starts with an M and is part of
+ * the path; ` and it is 2.05 GB` starts with a space and is not. That single
+ * rule reads both of those correctly without knowing anything about English,
+ * and it is asserted rather than consumed so that `.gitignore` — a name that is
+ * nothing but its extension — still gets to start with its own dot.
+ *
+ * A trailing `\` is then enough on its own to make a directory a link, and the
+ * whole match has to end at whitespace or punctuation. That last part is what
+ * keeps every shell prompt in the window from becoming a link: `PS C:\Users\OEM>`
+ * would otherwise match `C:\Users\` and underline the start of every line.
  */
+const PATH_START = String.raw`(?=[^\\\r\n<>"|*?:\s])`;
+const PATH_CHAR = String.raw`[^\\\r\n<>"|*?:]`;
+/** A segment is only known to be one because a `\` follows it. */
+const PATH_SEG = `${PATH_START}${PATH_CHAR}*\\\\`;
+/** The last piece, when the path names a file rather than a directory. */
+const PATH_FILE = `${PATH_START}${PATH_CHAR}*?\\.[A-Za-z0-9]{1,12}`;
+/**
+ * Where a path is allowed to stop. The `\.(?:\s|$)` arm is a full stop ending a
+ * sentence — `Saved to C:\out\report.txt.` — rather than a suffix.
+ */
+const PATH_END = String.raw`(?=[\s,;:)\]}'"]|\.(?:\s|$)|$)`;
 /**
  * Domains that get to be links without a scheme in front of them.
  *
@@ -1714,7 +1746,10 @@ const LINK_PATTERNS = [
   { find: /file:\/\/\/[^\s"'<>`|]+/g, target: (m) => m },
   { find: /https?:\/\/[^\s"'<>`|]+/g, target: (m) => m },
   {
-    find: /[A-Za-z]:\\[^\r\n<>"|*?]*?\.[A-Za-z0-9]{2,6}(?=[\s,;:)\]}'"]|$)/g,
+    find: new RegExp(
+      String.raw`[A-Za-z]:\\(?:${PATH_SEG})*(?:${PATH_FILE}${PATH_END})?${PATH_END}`,
+      "g"
+    ),
     target: toFileUrl,
   },
   {
