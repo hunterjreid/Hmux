@@ -235,6 +235,12 @@
           <button class="icon-btn" id="reload-btn" title="Reload">⟳</button>
           <input id="url" class="url-input" spellcheck="false"
                  placeholder="Search or enter address" />
+          <!-- Only ever shown for a `file://` address, because it is the only
+               kind the window can write back. Hidden rather than disabled: a
+               permanently greyed button on a bar this small is clutter that
+               never becomes useful. -->
+          <button class="icon-btn edit-btn" id="edit-btn" title="Edit this file"
+                  hidden>Edit</button>
           <!-- Closing the panel belongs on the panel. The title bar's toggle
                opens it and then hides itself, because a control that opened a
                thing is not where anyone looks to shut it. -->
@@ -247,9 +253,20 @@
                that started loading would resize the page that was loading. -->
           <div class="browser-progress" id="browser-progress" hidden></div>
         </header>
-        <!-- Deliberately empty: the native browser webview is positioned over
-             this element's rectangle. Nothing drawn here would be visible. -->
-        <div class="browser-slot" id="browser-slot"></div>
+        <!-- Otherwise empty: the native browser webview is positioned over this
+             element's rectangle, so nothing drawn here would be visible. The
+             editor is the exception, and only because opening it parks that
+             webview off the slot first — see `pushBrowserBounds`. -->
+        <div class="browser-slot" id="browser-slot">
+          <div class="editor" id="editor" hidden>
+            <textarea id="editor-text" spellcheck="false" wrap="off"></textarea>
+            <footer class="editor-foot">
+              <span class="editor-path" id="editor-path"></span>
+              <button class="editor-btn" id="editor-cancel">Cancel</button>
+              <button class="editor-btn go" id="editor-save">Save</button>
+            </footer>
+          </div>
+        </div>
       </section>
     </div>
 

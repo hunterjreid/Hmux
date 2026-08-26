@@ -308,6 +308,89 @@ fn set_background(data: Option<String>) -> Result<(), String> {
     persist::save_background(data.as_deref()).map_err(|e| format!("{e:#}"))
 }
 
+/// A local text file, and how its lines ended when it was read.
+#[derive(serde::Serialize)]
+pub struct TextFile {
+    text: String,
+    /// Whether the file on disk used CRLF. Carried back out on save; see
+    /// [`write_text_file`].
+    crlf: bool,
+}
+
+/// How big a file the panel will open.
+///
+/// A textarea is not a code editor, and a window that stops answering for ten
+/// seconds is a worse outcome than a file that says no.
+const MAX_EDIT_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Read a local file so the panel can edit it.
+///
+/// The panel shows `file://` addresses perfectly well and cannot write to one,
+/// which is why this exists rather than anything in the webview.
+#[tauri::command]
+fn read_text_file(path: String) -> Result<TextFile, String> {
+    let meta = std::fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?;
+    if meta.is_dir() {
+        return Err(format!("{path} is a folder"));
+    }
+    if meta.len() > MAX_EDIT_BYTES {
+        return Err(format!(
+            "{path} is {} MB, and the editor opens files up to {} MB",
+            meta.len() / (1024 * 1024),
+            MAX_EDIT_BYTES / (1024 * 1024)
+        ));
+    }
+
+    let bytes = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+    // The oldest and most reliable sign that this is not text. Opening a binary
+    // in a textarea shows mojibake, and saving that mojibake writes it over a
+    // file that was perfectly good.
+    if bytes.contains(&0) {
+        return Err(format!("{path} is not a text file"));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| format!("{path} is not valid UTF-8"))?;
+
+    // Handed over with LF endings, because that is what a textarea gives back
+    // whatever it was given. Which of the two it was is remembered instead.
+    let crlf = text.contains("\r\n");
+    Ok(TextFile {
+        text: text.replace("\r\n", "\n"),
+        crlf,
+    })
+}
+
+/// Write it back.
+#[tauri::command]
+fn write_text_file(path: String, text: String, crlf: bool) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    if target.is_dir() {
+        return Err(format!("{path} is a folder"));
+    }
+
+    // A textarea hands back LF whatever the file had. Writing that straight out
+    // rewrites every line ending in the file — invisible in the panel, and the
+    // entire diff the next time anyone looks at it in git.
+    let body = if crlf {
+        text.replace("\r\n", "\n").replace('\n', "\r\n")
+    } else {
+        text
+    };
+
+    // Written beside the file and renamed over it, so a write that fails part
+    // way through leaves the original rather than half of it. `rename` replaces
+    // an existing destination on Windows.
+    let mut tmp = target.clone().into_os_string();
+    tmp.push(".hmux-tmp");
+    let tmp = PathBuf::from(tmp);
+
+    std::fs::write(&tmp, body).map_err(|e| format!("{path}: {e}"))?;
+    if let Err(e) = std::fs::rename(&tmp, &target) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("{path}: {e}"));
+    }
+    Ok(())
+}
+
 /// Start a terminal from a saved one: same shell, same directory, with the old
 /// session's output replayed above a rule.
 #[tauri::command]
@@ -706,6 +789,8 @@ fn main() {
             load_layout,
             get_background,
             set_background,
+            read_text_file,
+            write_text_file,
             restore_terminal,
             update::update_download,
             update::update_staged,

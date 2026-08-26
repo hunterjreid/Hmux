@@ -39,6 +39,12 @@ const els = {
   titlebar: document.getElementById("titlebar"),
   toast: document.getElementById("toast"),
   winMaxIcon: document.getElementById("win-max-icon"),
+  editBtn: document.getElementById("edit-btn"),
+  editor: document.getElementById("editor"),
+  editorText: document.getElementById("editor-text"),
+  editorPath: document.getElementById("editor-path"),
+  editorSave: document.getElementById("editor-save"),
+  editorCancel: document.getElementById("editor-cancel"),
 };
 
 /**
@@ -499,6 +505,9 @@ function selectTab(entry, tabId) {
   if (tab) tab.usedAt = performance.now();
   els.url.value = tab && tab.url !== HOME_PAGE ? tab.url : "";
   renderTabs();
+  // The editor belongs to one tab. Leaving it puts it away without throwing it
+  // away, and coming back brings it up with whatever was typed still in it.
+  applyEditor();
   applyLoading();
   // Which webview is over the slot is decided by the tab handed to Rust, so
   // the panel has to be told again even though nothing about it moved — and
@@ -614,6 +623,10 @@ function renderTabs() {
 
     els.tabs.appendChild(el);
   }
+
+  // Whether Edit belongs on the bar is a fact about the address the panel is
+  // showing, and this runs whenever that can have changed.
+  refreshEditButton();
 }
 
 /**
@@ -1659,6 +1672,31 @@ async function attachBacklog(entry, id, attempt = 0) {
   }
 }
 
+/**
+ * Turn a `file:///` address back into the path it was made from.
+ *
+ * The inverse of `toFileUrl`, and the reason the editor can exist at all: the
+ * panel is handed addresses, and writing to one needs a path.
+ *
+ * Answers null for anything that is not a local file with a drive letter on it.
+ * A `file://` URL naming a network share, or a directory listing, is a page the
+ * panel can show and not a file this window has any business writing over.
+ */
+function fileUrlToPath(url) {
+  if (!/^file:\/\//i.test(url || "")) return null;
+  // Query and fragment belong to the address, not to the file.
+  const rest = url.replace(/^file:\/+/i, "").split(/[?#]/)[0];
+  let path;
+  try {
+    path = decodeURIComponent(rest);
+  } catch {
+    // A stray percent that is not an escape. Not ours to guess at.
+    return null;
+  }
+  path = path.replace(/\//g, "\\");
+  return /^[A-Za-z]:\\/.test(path) ? path : null;
+}
+
 /** Turn `C:\dir\a file.png` into a URL a webview will accept. */
 function toFileUrl(path) {
   const parts = path.replace(/\\/g, "/").split("/");
@@ -2202,6 +2240,9 @@ async function selectTerminal(id) {
   els.url.value = showing && showing.url !== HOME_PAGE ? showing.url : "";
   renderTabs();
   applyBrowserVisibility();
+  // Same as switching tabs: the editor is one tab's, so arriving at a different
+  // terminal puts it away rather than dragging it along.
+  applyEditor();
 
   syncSize(id);
   entry.term.focus();
@@ -2217,6 +2258,127 @@ async function selectTerminal(id) {
   // which is a terminal you left at its prompt coming back part way up an hour
   // of history. `follow` is the answer to the question actually being asked.
   pinBottom(entry);
+}
+
+/**
+ * The file the editor is open on, or null.
+ *
+ * Bound to the terminal and the tab it was opened from, rather than to the
+ * window. Every terminal has its own browser and its own tabs, so an editor
+ * that belonged to the window would follow you to a terminal it has nothing to
+ * do with. Switching away hides it and leaves the text where it is; switching
+ * back brings it up unchanged.
+ *
+ * `loaded` is the text as it came off disk, and the only thing "has this been
+ * edited" is ever asked of. Comparing against it rather than tracking a flag
+ * means typing something and undoing it leaves the file alone.
+ */
+let editing = null;
+
+/** Whether the editor is on screen, rather than merely open. */
+function editorShowing() {
+  if (!editing || editing.termId !== activeId) return false;
+  const entry = terminals.get(activeId);
+  if (!entry || !entry.browserOpen) return false;
+  const tab = activeTab(entry);
+  return !!tab && tab.id === editing.tabId;
+}
+
+/** Whether what is in the box differs from what is on disk. */
+function editorDirty() {
+  return !!editing && els.editorText.value !== editing.loaded;
+}
+
+/** The last part of a path, for saying which file without saying where. */
+function baseName(path) {
+  const at = path.lastIndexOf("\\");
+  return at < 0 ? path : path.slice(at + 1);
+}
+
+/** Show or hide the editor, and move the page out from under it or back. */
+function applyEditor() {
+  const showing = editorShowing();
+  els.editor.hidden = !showing;
+  els.editorSave.disabled = !editorDirty();
+  refreshEditButton();
+  pushBrowserBounds(true);
+  if (showing) els.editorText.focus();
+}
+
+/**
+ * Offer the Edit button for a local file, and only for a local file.
+ *
+ * A `file://` address is the only kind this window can write back, so it is the
+ * only kind the button appears for. Hidden while the editor is up, because at
+ * that point it would open the thing already open.
+ */
+function refreshEditButton() {
+  const entry = activeId === null ? null : terminals.get(activeId);
+  const tab = entry && entry.browserOpen ? activeTab(entry) : null;
+  const path = tab ? fileUrlToPath(tab.url) : null;
+  els.editBtn.hidden = !path || editorShowing();
+}
+
+/** Read the file the panel is showing into the editor. */
+async function openEditor() {
+  const entry = activeId === null ? null : terminals.get(activeId);
+  const tab = entry && activeTab(entry);
+  const path = tab ? fileUrlToPath(tab.url) : null;
+  if (!path) return;
+
+  // One editor at a time, and opening a second over unsaved work would be the
+  // quickest way to lose it. Refused rather than asked about: a confirm in this
+  // window blocks the whole webview, terminals included, until it is answered.
+  if (editing && editorDirty() && editing.path !== path) {
+    showError("edit", `save or cancel ${baseName(editing.path)} first`);
+    return;
+  }
+
+  let file;
+  try {
+    file = await invoke("read_text_file", { path });
+  } catch (e) {
+    showError("edit", e);
+    return;
+  }
+
+  editing = {
+    termId: activeId,
+    tabId: tab.id,
+    path,
+    crlf: file.crlf,
+    loaded: file.text,
+  };
+  els.editorText.value = file.text;
+  els.editorPath.textContent = path;
+  applyEditor();
+}
+
+/** Write it back, then show the panel the file it now is. */
+async function saveEditor() {
+  if (!editing || !editorDirty()) return;
+  const { path, crlf } = editing;
+  const text = els.editorText.value;
+  try {
+    await invoke("write_text_file", { path, text, crlf });
+  } catch (e) {
+    showError("save", e);
+    return;
+  }
+  editing.loaded = text;
+  closeEditor();
+  // The page under the editor is the file as it was before the save, so it has
+  // to be asked for again or closing the editor reveals a stale copy of what
+  // was just changed.
+  history("reload");
+}
+
+/** Put the editor away. Whatever is in the box is discarded. */
+function closeEditor() {
+  editing = null;
+  els.editorText.value = "";
+  els.editorPath.textContent = "";
+  applyEditor();
 }
 
 /**
@@ -3472,6 +3634,12 @@ function pushBrowserBounds(force = false) {
   // rectangle.
   if (!layoutReady) showing = null;
 
+  // The editor is in this document and the browser is a separate window as far
+  // as the OS is concerned, so nothing here can be drawn over one. Editing
+  // therefore has to move the page out of the way rather than cover it, which
+  // is the same thing a toast overlapping the slot does.
+  if (editorShowing()) showing = null;
+
   invoke("browser_layout", {
     active: showing ? showing.id : null,
     x: left,
@@ -4432,6 +4600,42 @@ async function main() {
   document.getElementById("back-btn").onclick = () => history("back");
   document.getElementById("fwd-btn").onclick = () => history("forward");
   document.getElementById("reload-btn").onclick = () => history("reload");
+
+  els.editBtn.onclick = () => openEditor().catch((e) => showError("edit", e));
+  els.editorCancel.onclick = closeEditor;
+  els.editorSave.onclick = () => saveEditor().catch((e) => showError("save", e));
+
+  // Save is offered only when there is something to save, which is also the
+  // only readout saying whether what is on screen has reached the disk.
+  els.editorText.addEventListener("input", () => {
+    els.editorSave.disabled = !editorDirty();
+  });
+
+  els.editorText.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && !e.shiftKey && (e.key === "s" || e.key === "S")) {
+      e.preventDefault();
+      saveEditor().catch((err) => showError("save", err));
+      return;
+    }
+    // Escape closes, but only when closing costs nothing. Unsaved text needs
+    // the button that says Cancel on it, because a key pressed by habit is not
+    // a decision to throw work away.
+    if (e.key === "Escape" && !editorDirty()) {
+      e.stopPropagation();
+      closeEditor();
+      return;
+    }
+    // Tab indents rather than leaving the box. There is nowhere useful for it
+    // to go, and a file with indentation in it is most of what gets edited.
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const box = els.editorText;
+      const { selectionStart: from, selectionEnd: to } = box;
+      box.value = `${box.value.slice(0, from)}\t${box.value.slice(to)}`;
+      box.selectionStart = box.selectionEnd = from + 1;
+      els.editorSave.disabled = !editorDirty();
+    }
+  });
 
   // The rail's ceiling is high because a terminal named after what it is doing
   // is a sentence, not a word, and a rail too narrow to read one is a rail you

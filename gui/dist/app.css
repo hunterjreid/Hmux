@@ -1975,6 +1975,113 @@ body {
   width: var(--browser-w);
   min-height: 0;
   background: var(--browser);
+  /* So the editor can fill it. Everything else in here is a hole for a native
+     webview and draws nothing. */
+  position: relative;
+}
+
+/* Editing a local file, in the slot the page would be in.
+ *
+ * The native browser is parked off the slot while this is up rather than being
+ * covered by it: it is a separate window as far as the OS is concerned and
+ * nothing in this document can be drawn over one. */
+.editor {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--browser);
+}
+
+.editor[hidden] {
+  display: none;
+}
+
+#editor-text {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: 14px 16px;
+  background: transparent;
+  color: var(--text);
+  font-family: "Geist Mono", "Cascadia Code", Consolas, monospace;
+  /* The same size and spacing the terminal uses, because this is the same text
+     seen a moment ago in one. */
+  font-size: 13px;
+  line-height: 1.5;
+  tab-size: 4;
+  /* Horizontal scrolling rather than wrapping: a file is a set of lines, and
+     soft-wrapping one makes the line a message quotes no longer the line the
+     file has. */
+  white-space: pre;
+  overflow: auto;
+}
+
+.editor-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--elev);
+}
+
+/* The path, given the whole of the space the buttons do not need, and cut from
+   the left: the end of a path says which file, the start says which drive. */
+.editor-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--faint);
+  font-size: 11px;
+  direction: rtl;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-btn {
+  flex: none;
+  padding: 6px 14px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--elev-hi);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease);
+}
+
+.editor-btn:hover {
+  background: var(--row-active);
+}
+
+.editor-btn.go {
+  border-color: transparent;
+  background: var(--go);
+  color: #fff;
+}
+
+.editor-btn.go:hover {
+  background: var(--go-hover);
+}
+
+/* Nothing to save. Kept in place rather than hidden so the row does not change
+   shape the moment you start typing. */
+.editor-btn.go:disabled {
+  background: var(--elev-hi);
+  color: var(--faint);
+  cursor: default;
+}
+
+/* Text, not an icon, so it is left to size itself. */
+.edit-btn {
+  width: auto;
+  padding: 0 10px;
+  font-size: 11px;
 }
 
 /* Browsers come from a fixed pool; past that a terminal has none. */
