@@ -2840,6 +2840,44 @@ function updateRightSlot(row, info) {
     el.appendChild(document.createElement("i"));
   }
   row.appendChild(el);
+  startTogether(el);
+}
+
+/**
+ * Start this indicator's animation where every other one already is.
+ *
+ * A CSS animation begins when its element does, and these elements are made
+ * whenever a terminal happens to start working. Four rows working at once were
+ * therefore four copies of the same fade at four unrelated points in it. Each
+ * one correct, and the column of them reading as noise: the eye is offered a
+ * rhythm and finds four.
+ *
+ * Setting `startTime` to zero says the animation began at the document's own
+ * time origin — a moment every indicator agrees on however long after it each
+ * was created, so their phases come out identical rather than merely close.
+ *
+ * The alternative was a negative `animation-delay`, and it is worse twice over:
+ * it would have to know the duration in JavaScript alongside a stylesheet that
+ * already states it, and it would still land a frame out, because an animation
+ * starts on the frame after its element is appended rather than at the moment
+ * the delay was worked out.
+ *
+ * The stagger between the three dots is part of each animation's own delay, so
+ * it survives untouched — they still travel, now together with every other row.
+ */
+function startTogether(el) {
+  try {
+    // The animations exist only once style has been resolved for the element
+    // just appended, and asking is what forces that. Nothing to synchronise is
+    // an ordinary answer: the dead marker is a dot that does not move.
+    for (const animation of el.getAnimations({ subtree: true })) {
+      animation.startTime = 0;
+    }
+  } catch {
+    // Out of step is the look this exists to fix, not a broken rail. Whatever
+    // this row ends up doing, it must not be the thing that stops the list
+    // being drawn.
+  }
 }
 
 // ------------------------------------------------------- rail context menu
