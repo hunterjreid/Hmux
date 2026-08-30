@@ -61,7 +61,93 @@ const BACKLOG_LIMIT: usize = 4 * 1024 * 1024;
 /// See the identically named constant in the GUI: recent output is how "is it
 /// working" is decided, and a repaint is not work.
 const WORKING_WINDOW: Duration = Duration::from_millis(700);
-const REPAINT_GRACE: Duration = Duration::from_millis(350);
+
+/// How long after a resize the pty is allowed to be noisy without that counting
+/// as work.
+///
+/// A resize is not one repaint. ConPTY redraws the whole screen, an inline TUI
+/// answers by drawing itself again, and the window resizes *every* terminal at
+/// once rather than only the one on screen — so a dozen shells all repaint into
+/// the same few hundred milliseconds. A grace short enough that the tail of
+/// that lands outside it is worse than no grace at all: one late byte marks the
+/// terminal as working, and the front end holds that mark for five seconds, so
+/// dragging a window edge lit every row in the rail green for a job nobody
+/// started.
+const REPAINT_GRACE: Duration = Duration::from_millis(700);
+
+/// How far each chunk of a repaint pushes the grace out ahead of itself.
+///
+/// A repaint arrives in bursts with gaps between them, and the gaps are the
+/// same length as the thing measuring them, so a fixed window ends in the
+/// middle of one. While output is still arriving inside the grace it is still
+/// the repaint, and the grace follows it rather than expiring underneath it.
+const REPAINT_TAIL: Duration = Duration::from_millis(300);
+
+/// The hard limit on how far [`REPAINT_TAIL`] may carry the grace.
+///
+/// Without it a terminal that was genuinely working when it was resized would
+/// keep extending its own silence and never light up again. Long enough for a
+/// slow full-screen redraw, short enough that real work resumes reading as work
+/// within about a second of the last frame of the drag.
+const REPAINT_MAX: Duration = Duration::from_millis(2500);
+
+/// Whether a terminal is working, and the grace that keeps a repaint from
+/// looking like it.
+///
+/// Kept as its own type rather than three fields on the session so the rule can
+/// be exercised without a live pty behind it — the whole point is what happens
+/// across a handful of instants, and that is not something a running shell can
+/// be asked to reproduce on demand.
+#[derive(Debug, Clone, Copy)]
+struct Working {
+    /// When output last counted as work.
+    last_output: Instant,
+    /// Output before this instant is a screen being drawn, not a command.
+    quiet_until: Instant,
+    /// How far the repaint currently being swallowed may carry `quiet_until`.
+    quiet_cap: Instant,
+}
+
+impl Working {
+    /// A terminal that has just started: what comes back first is its banner.
+    fn starting(now: Instant) -> Self {
+        Working {
+            last_output: now,
+            quiet_until: now + REPAINT_GRACE,
+            quiet_cap: now + REPAINT_MAX,
+        }
+    }
+
+    /// A new size has been handed to the pty, so a repaint is on its way.
+    ///
+    /// Deliberately leaves `last_output` alone: a terminal that was genuinely
+    /// working a moment ago still was, and resizing the window is not an
+    /// admission that it has stopped.
+    fn resized(&mut self, now: Instant) {
+        self.quiet_until = now + REPAINT_GRACE;
+        self.quiet_cap = now + REPAINT_MAX;
+    }
+
+    /// Fold one chunk of pty output into the judgement.
+    fn output(&mut self, now: Instant) {
+        if now >= self.quiet_until {
+            self.last_output = now;
+            return;
+        }
+        // Still inside the grace, so this is the repaint rather than work.
+        // Carry the grace along with it, or the gap between two bursts of one
+        // redraw ends it and the rest of the same redraw reads as a command
+        // starting. Capped, or a terminal that never goes quiet never lights.
+        let tail = (now + REPAINT_TAIL).min(self.quiet_cap);
+        if tail > self.quiet_until {
+            self.quiet_until = tail;
+        }
+    }
+
+    fn is_working(&self, now: Instant) -> bool {
+        now.duration_since(self.last_output) < WORKING_WINDOW && now >= self.quiet_until
+    }
+}
 
 /// How long the daemon stays up with nothing to hold.
 ///
@@ -116,8 +202,7 @@ struct Session {
     backlog: VecDeque<Chunk>,
     backlog_bytes: usize,
     last_seq: u64,
-    last_output: Instant,
-    quiet_until: Instant,
+    working: Working,
     /// A terminal emulator the daemon keeps for one reason: programs ask the
     /// terminal questions — where is the cursor, what are you — and block until
     /// something answers. A front end answers them today because it is a
@@ -133,8 +218,7 @@ struct Session {
 
 impl Session {
     fn info(&self, table: &ProcessTable) -> SessionInfo {
-        let working =
-            self.last_output.elapsed() < WORKING_WINDOW && Instant::now() >= self.quiet_until;
+        let working = self.working.is_working(Instant::now());
         let activity = table.activity_of(self.proc.pid(), self.proc.is_alive(), working);
         SessionInfo {
             id: self.id,
@@ -329,9 +413,8 @@ impl Hub {
                 backlog: VecDeque::new(),
                 backlog_bytes: 0,
                 last_seq: 0,
-                last_output: Instant::now(),
                 // A shell printing its banner is not the terminal working.
-                quiet_until: Instant::now() + REPAINT_GRACE,
+                working: Working::starting(Instant::now()),
                 grid: Arc::new(Mutex::new(Grid::new(cols as usize, rows as usize))),
             };
             // Seeded before anything live, so a restored terminal's history sits
@@ -437,10 +520,7 @@ impl Hub {
                     let Some(session) = reg.sessions.get_mut(&id) else {
                         break;
                     };
-                    let now = Instant::now();
-                    if now >= session.quiet_until {
-                        session.last_output = now;
-                    }
+                    session.working.output(Instant::now());
                     let seq = session.push(text.clone());
                     reg.broadcast(id, &Event::Output { id, seq, data: text });
                 }
@@ -531,7 +611,7 @@ impl Hub {
                     s.rows = rows;
                     // Opened before the resize, so the repaint it provokes is
                     // already inside the window when its first byte lands.
-                    s.quiet_until = Instant::now() + REPAINT_GRACE;
+                    s.working.resized(Instant::now());
                     if let Ok(mut g) = s.grid.lock() {
                         g.resize(cols as usize, rows as usize);
                     }
@@ -800,6 +880,100 @@ mod tests {
         // A pipe path cannot contain a backslash past the prefix, and a
         // username can.
         assert!(!name[r"\\.\pipe\".len()..].contains('\\'));
+    }
+
+    /// The whole of a resize as the daemon sees it: a size goes out, and the
+    /// repaint comes back in bursts over `spread`, the gaps between them wider
+    /// than any one window. Answers whether the rail lit up green for it.
+    fn resize_reads_as_work(spread: Duration, gap: Duration) -> bool {
+        let t0 = Instant::now();
+        let mut w = Working::starting(t0);
+        // Long since settled at a prompt: nothing here is real work.
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let resize_at = 10_000;
+        w.resized(at(resize_at));
+
+        let mut t = resize_at;
+        while t <= resize_at + spread.as_millis() as u64 {
+            w.output(at(t));
+            if w.is_working(at(t)) {
+                return true;
+            }
+            t += gap.as_millis() as u64;
+        }
+        // And for a beat afterwards, which is where the front end's five-second
+        // hold would latch on to anything that leaked.
+        (0..=1000)
+            .step_by(50)
+            .any(|after| w.is_working(at(t + after)))
+    }
+
+    #[test]
+    fn a_slow_repaint_never_reads_as_the_terminal_working() {
+        // The bug: ConPTY redraws every terminal at once when the window is
+        // resized, the tail of that lands outside a short grace, and one late
+        // byte turned every row in the rail green for five seconds.
+        assert!(
+            !resize_reads_as_work(Duration::from_millis(1500), Duration::from_millis(250)),
+            "a repaint that outlasts the grace must not read as work"
+        );
+    }
+
+    #[test]
+    fn a_repaint_that_will_not_stop_gives_up_and_reads_as_work() {
+        // The other direction: the grace cannot be extended forever, or a
+        // terminal that was genuinely building when it was resized goes dark
+        // for as long as it keeps printing.
+        assert!(
+            resize_reads_as_work(Duration::from_secs(8), Duration::from_millis(250)),
+            "output past REPAINT_MAX is work again"
+        );
+    }
+
+    #[test]
+    fn work_underway_when_the_window_was_resized_comes_back_within_the_hold() {
+        // A build resized mid-flight cannot be told apart from a repaint while
+        // the grace is open, so it does go quiet — and it has to come back
+        // inside the front end's five-second hold on the last busy sample, or
+        // the dots visibly drop out of a build that never stopped.
+        let t0 = Instant::now();
+        let mut w = Working::starting(t0);
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+
+        w.output(at(10_000));
+        assert!(w.is_working(at(10_010)), "output well clear of any grace");
+
+        w.resized(at(10_020));
+        assert!(
+            !w.is_working(at(10_030)),
+            "inside the grace, the redraw is not counted"
+        );
+
+        let mut lit = None;
+        for t in (10_020..16_000).step_by(50) {
+            w.output(at(t));
+            if w.is_working(at(t)) {
+                lit = Some(t - 10_020);
+                break;
+            }
+        }
+        let gap = lit.expect("a terminal printing steadily must light again");
+        assert!(
+            gap <= REPAINT_MAX.as_millis() as u64,
+            "back to working {gap}ms after the resize, past REPAINT_MAX"
+        );
+        // BUSY_HOLD_MS in the GUI. Named here because that is what makes the
+        // gap invisible rather than merely short.
+        assert!(gap < 5_000, "and well inside the front end's hold");
+    }
+
+    #[test]
+    fn a_terminal_that_goes_quiet_stops_reading_as_working() {
+        let t0 = Instant::now();
+        let mut w = Working::starting(t0);
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        w.output(at(10_000));
+        assert!(!w.is_working(at(10_000 + WORKING_WINDOW.as_millis() as u64)));
     }
 
     #[test]
