@@ -119,6 +119,26 @@ fn open_external(url: String) -> Result<(), String> {
         .map_err(|e| format!("could not open {url}: {e}"))
 }
 
+/// Open a terminal path in Explorer when it names a directory.
+///
+/// Files deliberately answer false: the terminal's existing browser panel is
+/// a better preview and editor for those. Metadata, rather than a trailing slash
+/// or extension, also handles dotted directory names correctly.
+#[tauri::command]
+fn open_local_path(path: String) -> Result<bool, String> {
+    let metadata = std::fs::metadata(&path)
+        .map_err(|e| format!("could not inspect {path}: {e}"))?;
+    if !metadata.is_dir() {
+        return Ok(false);
+    }
+
+    std::process::Command::new("explorer.exe")
+        .arg(&path)
+        .spawn()
+        .map(|_| true)
+        .map_err(|e| format!("could not open {path}: {e}"))
+}
+
 /// Who is running this, for the foot of the profile menu.
 ///
 /// The Windows account, because that is the only identity hmux has. There is
@@ -736,6 +756,32 @@ fn browser_history(
     webview.eval(script).map_err(|e| e.to_string())
 }
 
+/// Arm the element picker on a tab's page.
+///
+/// The script is baked in rather than passed down from the chrome. A command
+/// that took the JavaScript to run would be a way to run any JavaScript in any
+/// open page, which is not a thing this window should be able to be talked into.
+///
+/// `include_str!` rather than a literal because it is a couple of hundred lines
+/// of front end, and it belongs beside the rest of the front end where it can be
+/// read and `node --check`ed. Cargo tracks the file, so editing it rebuilds this
+/// crate the same way editing `app.js` does.
+///
+/// One shot. The script disarms itself once something is picked or Escape is
+/// pressed, and re-arming replaces whatever is there, so this can be called
+/// again without asking whether it is already running.
+#[tauri::command]
+fn browser_pick(
+    app: tauri::AppHandle,
+    pool: tauri::State<'_, Mutex<browser::Pool>>,
+    tab: browser::TabId,
+) -> Result<(), String> {
+    let webview = webview_for(&app, &pool, tab)?;
+    webview
+        .eval(include_str!("../../dist/picker.js"))
+        .map_err(|e| e.to_string())
+}
+
 /// The address to show in the bar. Empty for the new-tab page, whose real
 /// address is an internal asset path nobody wants to look at.
 #[tauri::command]
@@ -773,12 +819,14 @@ fn main() {
             browser_release,
             browser_navigate,
             browser_history,
+            browser_pick,
             browser_url,
             ui_log,
             app_version,
             is_release_build,
             account_name,
             open_external,
+            open_local_path,
             window_minimize,
             window_toggle_maximize,
             window_toggle_fullscreen,

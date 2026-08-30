@@ -40,6 +40,7 @@ const els = {
   toast: document.getElementById("toast"),
   winMaxIcon: document.getElementById("win-max-icon"),
   editBtn: document.getElementById("edit-btn"),
+  pickBtn: document.getElementById("pick-btn"),
   editor: document.getElementById("editor"),
   editorText: document.getElementById("editor-text"),
   editorPath: document.getElementById("editor-path"),
@@ -624,9 +625,9 @@ function renderTabs() {
     els.tabs.appendChild(el);
   }
 
-  // Whether Edit belongs on the bar is a fact about the address the panel is
-  // showing, and this runs whenever that can have changed.
-  refreshEditButton();
+  // Whether Edit and Pick belong on the bar is a fact about the address the
+  // panel is showing, and this runs whenever that can have changed.
+  refreshBarButtons();
 }
 
 /**
@@ -1386,35 +1387,79 @@ function makeTerminal(id, initial = null) {
   term.open(view);
 
   /**
-   * Right click pastes. That is the whole gesture.
+   * Right click opens a menu, and the menu says Copy and Paste.
    *
-   * It has been two other things. A silent copy-when-something-is-selected,
-   * paste-when-nothing-is, which is what a terminal on Windows traditionally
-   * does and which does whichever of the two you did not just decide you
-   * wanted. Then a menu naming both, which is honest and is also two clicks and
-   * a read for something done fifty times an hour.
+   * This has been three things now, and the two it stopped being were both
+   * silent. Copy-when-something-is-selected and paste-when-nothing-is happens
+   * instantly and shows you nothing, so the only way to learn what it just did
+   * is to look at what changed; paste-only was at least predictable, but it
+   * meant the terminal had no visible copy at all and you had to know
+   * Ctrl+Shift+C existed to get one.
    *
-   * Both were trying to fit two jobs onto one button. Paste is the one worth
-   * having there, so it is the only one there, and it does the same thing every
-   * time whether or not anything is selected. Copy is Ctrl+Shift+C, below.
+   * That is the thing a menu is actually for. It is not two clicks instead of
+   * one, it is a list of what this button can do, sitting where the button is,
+   * for anyone who does not already have the chord memorised. **A gesture you
+   * cannot see is a gesture you have to be told about**, and there is nowhere
+   * in a terminal to tell you.
+   *
+   * Copy is drawn greyed rather than left out when nothing is selected, which
+   * is the same rule the rail's menu follows: a row that is greyed says why
+   * nothing will happen, and a row that is absent says nothing at all.
+   *
+   * Copy deliberately leaves the selection up. It cleared it in the silent
+   * version, where the highlight going away was the only receipt available, and
+   * that reasoning dies with the menu: you clicked a thing that said Copy, so
+   * you know. Wiping a highlight that a person put there by hand, when they
+   * might want to copy it twice or just keep seeing it, is a cost with nothing
+   * left to buy.
    *
    * The paste goes through xterm rather than straight down the pty, which
-   * matters more than it looks: a shell with bracketed paste on — every one of
-   * them here, they all set `?2004h` — expects pasted text wrapped in markers
+   * matters more than it looks: a shell with bracketed paste on, every one of
+   * them here, they all set `?2004h`, expects pasted text wrapped in markers
    * that tell it this was pasted rather than typed. Without them a paste of
    * five lines runs five commands, and the fifth runs before you have read the
    * first. `term.paste` wraps it or does not, according to the mode the shell
    * actually set.
    */
-  view.addEventListener("contextmenu", async (e) => {
+  view.addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    try {
-      const text = await invoke("clipboard_read");
-      if (text) term.paste(text);
-    } catch (err) {
-      showError("paste", err);
-    }
-    term.focus();
+
+    // Read now, not inside the action. By the time a menu entry is clicked the
+    // click itself has moved focus, and output arriving in the meantime can
+    // scroll the buffer out from under a selection that was made rows ago.
+    //
+    // Whitespace-only counts as nothing to copy: xterm reports a stray
+    // one-pixel drag over blank screen as a selection, and copying that would
+    // put an empty string on the clipboard, which is not a no-op but the
+    // destruction of whatever was on there.
+    const selection = term.getSelection();
+
+    openContextMenu(e.clientX, e.clientY, [
+      {
+        label: "Copy",
+        disabled: !selection,
+        action: async () => {
+          try {
+            await invoke("clipboard_write", { text: selection });
+          } catch (err) {
+            showError("copy", err);
+          }
+          term.focus();
+        },
+      },
+      {
+        label: "Paste",
+        action: async () => {
+          try {
+            const text = await invoke("clipboard_read");
+            if (text) term.paste(text);
+          } catch (err) {
+            showError("paste", err);
+          }
+          term.focus();
+        },
+      },
+    ]);
   });
 
   // Before a single byte of the replay lands. Opening sizes the terminal to a
@@ -1444,18 +1489,22 @@ function makeTerminal(id, initial = null) {
   term.attachCustomKeyEventHandler((e) => {
     if (e.ctrlKey && e.shiftKey && (e.key === "L" || e.key === "l")) return false;
 
-    // Copy, since right-click no longer offers it.
+    // Copy and paste from the keyboard, for when the menu is the long way
+    // round. The menu is what makes the two discoverable; these are what make
+    // them quick once you know, and paste especially, because it went from one
+    // click to a click and a read the day the menu arrived.
     //
-    // Ctrl+C cannot be the one: it is the interrupt, and a terminal that
-    // cannot stop a running command the way every other terminal does is
-    // broken in a much more expensive way than one with an awkward copy. So
-    // Ctrl+Shift+C, which is where every terminal on Windows keeps it for
+    // Ctrl+C and Ctrl+V cannot be the ones: Ctrl+C is the interrupt, and a
+    // terminal that cannot stop a running command the way every other terminal
+    // does is broken in a much more expensive way than one with an awkward
+    // copy. Ctrl+V is a literal byte a shell is entitled to read. So the
+    // Shift versions, which is where every terminal on Windows keeps them for
     // exactly this reason.
     //
-    // Handled here rather than in the window's key handler because it needs
-    // this terminal's selection, and returning false is what stops the chord
-    // reaching the shell as well. Guarded on keydown because xterm runs this
-    // for keypress too, and one clipboard write is enough.
+    // Handled here rather than in the window's key handler because they need
+    // this terminal, and returning false is what stops the chord reaching the
+    // shell as well. Guarded on keydown because xterm runs this for keypress
+    // too, and one clipboard call is enough.
     if (e.ctrlKey && e.shiftKey && (e.key === "C" || e.key === "c")) {
       if (e.type === "keydown") {
         const selection = term.getSelection();
@@ -1464,6 +1513,17 @@ function makeTerminal(id, initial = null) {
             showError("copy", err)
           );
         }
+      }
+      return false;
+    }
+
+    if (e.ctrlKey && e.shiftKey && (e.key === "V" || e.key === "v")) {
+      if (e.type === "keydown") {
+        invoke("clipboard_read")
+          .then((text) => {
+            if (text) term.paste(text);
+          })
+          .catch((err) => showError("paste", err));
       }
       return false;
     }
@@ -1742,6 +1802,12 @@ const PATH_SEG = `${PATH_START}${PATH_CHAR}*\\\\`;
 /** The last piece, when the path names a file rather than a directory. */
 const PATH_FILE = `${PATH_START}${PATH_CHAR}*?\\.[A-Za-z0-9]{1,12}`;
 /**
+ * An extensionless final directory. Keep this to one whitespace-free segment:
+ * without consulting the filesystem, `C:\\out\\Final Clips are ready` cannot
+ * tell where the folder stops and the sentence starts.
+ */
+const PATH_LEAF = String.raw`[^\\\r\n<>"|*?:\s]+`;
+/**
  * Where a path is allowed to stop. The `\.(?:\s|$)` arm is a full stop ending a
  * sentence — `Saved to C:\out\report.txt.` — rather than a suffix.
  */
@@ -1756,12 +1822,38 @@ const PATH_END = String.raw`(?=[\s,;:)\]}'"]|\.(?:\s|$)|$)`;
 const BARE_TLDS =
   "com|net|org|io|dev|app|gg|ai|co|nz|au|uk|me|xyz|sh|to|so|tv|cc|info|store|shop";
 
+/**
+ * A dev server, written the way dev servers and the people talking about them
+ * write one: `localhost:5180`, `127.0.0.1:8787`, `0.0.0.0:3000`.
+ *
+ * The bare-domain pattern above cannot reach these and never will, because it
+ * works by recognising the last label as a TLD. `localhost` has no dot at all,
+ * and the last label of an address is a number. So without this the one address
+ * printed more than any other in a working terminal is the one thing in the
+ * window that is not clickable.
+ *
+ * **The port is required, and that is the whole guard.** Bare `localhost` turns
+ * every "serving on localhost" in prose into a link to port 80, where there is
+ * usually nothing, and a bare dotted-quad is indistinguishable from a version
+ * number. A colon and a port is a person naming a socket, which is never prose.
+ *
+ * Two digits minimum for the same reason, and it costs nothing: no server binds
+ * a single-digit port, while `1.2.3.4:5` is exactly what a false positive looks
+ * like. The `\b` after the port keeps a longer run of digits from matching a
+ * prefix of itself.
+ *
+ * `http`, not `https`, because a local server is plaintext until someone goes
+ * out of their way, and the ones that are not print their own scheme anyway,
+ * which the pattern above already catches.
+ */
+const HOST_PORT = String.raw`(?<![\\\w.:@/-])(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):\d{2,5}\b(?:/[^\s"'<>\`|]*)?`;
+
 const LINK_PATTERNS = [
   { find: /file:\/\/\/[^\s"'<>`|]+/g, target: (m) => m },
   { find: /https?:\/\/[^\s"'<>`|]+/g, target: (m) => m },
   {
     find: new RegExp(
-      String.raw`[A-Za-z]:\\(?:${PATH_SEG})*(?:${PATH_FILE}${PATH_END})?${PATH_END}`,
+      String.raw`[A-Za-z]:\\(?:${PATH_SEG})*(?:(?:${PATH_FILE}|${PATH_LEAF})${PATH_END})?${PATH_END}`,
       "g"
     ),
     target: toFileUrl,
@@ -1778,6 +1870,10 @@ const LINK_PATTERNS = [
       "gi"
     ),
     target: (m) => `https://${m}`,
+  },
+  {
+    find: new RegExp(HOST_PORT, "gi"),
+    target: (m) => `http://${m}`,
   },
 ];
 
@@ -1828,7 +1924,20 @@ function registerFileLinks(term, id) {
               end: { x: (to % cols) + 1, y: start + Math.floor(to / cols) + 1 },
             },
             activate: () => {
-              openInBrowserPanel(id, url).catch((e) => showError("open link", e));
+              const path = fileUrlToPath(url);
+              if (!path) {
+                openInBrowserPanel(id, url).catch((e) => showError("open link", e));
+                return;
+              }
+
+              // Directories belong in Explorer, where copying, dragging and
+              // opening their contents work normally. Files retain the panel
+              // preview and editor that terminal links have always used.
+              invoke("open_local_path", { path })
+                .then((opened) => {
+                  if (!opened) return openInBrowserPanel(id, url);
+                })
+                .catch((e) => showError("open link", e));
             },
           });
         }
@@ -2300,23 +2409,30 @@ function applyEditor() {
   const showing = editorShowing();
   els.editor.hidden = !showing;
   els.editorSave.disabled = !editorDirty();
-  refreshEditButton();
+  refreshBarButtons();
   pushBrowserBounds(true);
   if (showing) els.editorText.focus();
 }
 
 /**
- * Offer the Edit button for a local file, and only for a local file.
+ * Which of the address bar's two page buttons are worth showing.
  *
- * A `file://` address is the only kind this window can write back, so it is the
- * only kind the button appears for. Hidden while the editor is up, because at
- * that point it would open the thing already open.
+ * Edit is offered for a local file and only for a local file, because a
+ * `file://` address is the only kind this window can write back. Pick is
+ * offered for any page at all: it only reads, and the page a person most wants
+ * to point at is as often a dev server on localhost as a file on disk. Both are
+ * hidden rather than greyed, because a bar this small cannot afford a button
+ * that is permanently dead, and both go away while the editor is up, where one
+ * would open what is already open and the other would arm a page that has been
+ * parked off the slot and cannot be clicked.
  */
-function refreshEditButton() {
+function refreshBarButtons() {
   const entry = activeId === null ? null : terminals.get(activeId);
   const tab = entry && entry.browserOpen ? activeTab(entry) : null;
   const path = tab ? fileUrlToPath(tab.url) : null;
-  els.editBtn.hidden = !path || editorShowing();
+  const editorUp = editorShowing();
+  els.editBtn.hidden = !path || editorUp;
+  els.pickBtn.hidden = !tab || tab.url === HOME_PAGE || editorUp;
 }
 
 /** Read the file the panel is showing into the editor. */
@@ -3695,6 +3811,28 @@ function history(action) {
   if (tab) invoke("browser_history", { tab: tab.id, action }).catch(console.error);
 }
 
+/**
+ * Arm the element picker on the page the panel is showing.
+ *
+ * Everything after this happens inside that page and never comes back: it draws
+ * its own outline, writes its own clipboard and shows its own receipt. See
+ * `picker.js` for why it has to. This side only asks for it to start, so there
+ * is no armed state to keep here and no way for one to drift out of step with
+ * the page.
+ *
+ * Focus is deliberately not moved to the browser first. A native webview takes
+ * its own input, and the click that arrives to pick something is the same click
+ * that focuses it, so pushing focus across beforehand buys nothing. If Windows
+ * does eat that first click on activation, the picker's hint bar is still up and
+ * the second one lands, which is why the bar stays rather than flashing once.
+ */
+function armPicker() {
+  const entry = activeId === null ? null : terminals.get(activeId);
+  const tab = entry && entry.browserOpen ? activeTab(entry) : null;
+  if (!tab || tab.url === HOME_PAGE) return;
+  invoke("browser_pick", { tab: tab.id }).catch((e) => showError("pick", e));
+}
+
 // ------------------------------------------------------------- session state
 //
 // What the app remembers between runs. The shells themselves do not survive
@@ -4602,6 +4740,7 @@ async function main() {
   document.getElementById("reload-btn").onclick = () => history("reload");
 
   els.editBtn.onclick = () => openEditor().catch((e) => showError("edit", e));
+  els.pickBtn.onclick = () => armPicker();
   els.editorCancel.onclick = closeEditor;
   els.editorSave.onclick = () => saveEditor().catch((e) => showError("save", e));
 

@@ -68,6 +68,16 @@
       <symbol id="i-check" viewBox="0 0 12 12">
         <path d="M2 6.4 4.8 9.2 10 3.4" />
       </symbol>
+      <!-- A crosshair over a corner, which is what every browser's inspect
+           control looks like. Worth borrowing rather than inventing: the
+           gesture is the same one, and the icon is the only place it is
+           named. -->
+      <symbol id="i-pick" viewBox="0 0 16 16">
+        <path d="M2 5.5v-2a1.5 1.5 0 0 1 1.5-1.5h2" />
+        <path d="M14 5.5v-2A1.5 1.5 0 0 0 12.5 2h-2" />
+        <path d="M2 10.5v2A1.5 1.5 0 0 0 3.5 14h2" />
+        <path d="M8 5.2v5.6M5.2 8h5.6" />
+      </symbol>
       <!-- A monitor: a screen on a stand. The page beside the terminal is a
            whole display of its own, not a column of the window, and a globe
            would only say "web". -->
@@ -241,6 +251,14 @@
                never becomes useful. -->
           <button class="icon-btn edit-btn" id="edit-btn" title="Edit this file"
                   hidden>Edit</button>
+          <!-- Shown for any page rather than only a `file://` one, because
+               unlike Edit this never writes anything: it reads an element and
+               puts a description of it on the clipboard, which is as useful
+               against a dev server on localhost as against a file on disk. -->
+          <button class="icon-btn" id="pick-btn" hidden
+                  title="Pick an element and copy its details">
+            <svg class="ico"><use href="#i-pick" /></svg>
+          </button>
           <!-- Closing the panel belongs on the panel. The title bar's toggle
                opens it and then hides itself, because a control that opened a
                thing is not where anyone looks to shut it. -->

@@ -225,11 +225,44 @@ GUI:
 
 | Key | Does |
 | --- | --- |
+| `Right click` | menu: Copy, Paste |
+| `Ctrl+Shift+C` | copy the selection |
+| `Ctrl+Shift+V` | paste |
 | `Ctrl+Shift+L` | open the browser's address bar |
 | `Esc` | put it away again |
 | `F2` | rename the terminal the rail has focus on |
 | `F11` | fullscreen, and back |
 | `Ctrl+scroll` | font size |
+
+Right click names both jobs rather than guessing which one you meant. Copy is
+greyed when nothing is selected, and leaves the highlight up when it runs. The
+chords are there for once you know, which is the part a menu cannot do. `Ctrl+C`
+and `Ctrl+V` are left alone: one is the interrupt, the other is a byte the shell
+is entitled to read.
+
+If a full-screen program has taken the mouse, drag with `Shift` held to select.
+
+### Picking an element out of the page
+
+The crosshair on the address bar arms a picker on whatever the panel is showing.
+Hovering outlines an element and names it; clicking copies a description of it
+and puts the picker away. `Esc` cancels.
+
+What lands on the clipboard is written to be pasted straight into a coding
+agent: the file the page came from (a `file://` address is turned back into a
+Windows path), a CSS selector checked against the document so it can only mean
+the element you pointed at, the tag, id, classes, attributes and text, the size
+and position, the properties the page's own CSS chose, and the markup.
+
+Only the properties the page chose. Every element in existence reports
+`flex-direction: row`, a list item is `display: list-item` and an `h1` brings its
+own margin, none of which was a decision by anyone; they are dropped by
+comparing against a bare element of the same tag.
+
+It is offered for any page rather than only a local one, because it reads and
+never writes, and the page worth pointing at is as often a dev server as a file.
+The outline, the copying and the confirmation all happen inside the page: a page
+in the panel cannot call back into hmux, and hmux cannot draw over it.
 
 ## How it works
 

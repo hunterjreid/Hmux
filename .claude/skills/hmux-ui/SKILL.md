@@ -17,9 +17,15 @@ bundler, no npm build, no TypeScript, no framework.
 | `gui/dist/app.css` | All the styling. Design tokens are the `:root` block at the top. |
 | `gui/dist/vendor/` | xterm.js and its three addons, pinned. |
 | `gui/dist/newtab.html` | What the browser panel shows with no page in it. |
+| `gui/dist/picker.js` | The element picker, run **inside** a page in the panel. Loaded by nothing; `include_str!`d into the binary and evaluated by `browser_pick`. |
 | `gui/dist/backgrounds/` | The wallpapers offered in settings. |
 
 Editing one of those files *is* the change. Nothing generates them.
+
+**`picker.js` is the one file here that is not part of the app's own page.** It
+runs in whatever the panel has open, beside that page's own scripts, so it shares
+nothing with `app.js` — no `els`, no `invoke`, no helpers — and it cannot call
+back. See the rule about the panel's webviews below.
 
 **`gui/node_modules` is only where the vendored copies came from.** Nothing
 loads out of it at runtime. `gui/dist/vendor/*` are byte-for-byte copies of the
@@ -135,6 +141,23 @@ sent per frame is a banner per frame.
 from Rust. CSS moves the hole; `pushBrowserBounds` moves the page. `SLIDE_MS` in
 `app.js` and `--slide` in `app.css` are the same number written twice, and the
 two drifting apart shows as the page stopping short of the panel.
+
+**A page in the panel has no IPC, and must not be given any.** The capability in
+`capabilities/default.json` names `webviews: ["ui"]`, so only the chrome can
+invoke. Tauri also treats anything that is not the app's own asset origin as
+remote and refuses it there regardless — **`file://` included**, which is not
+obvious and is why a local file cannot invoke either. That boundary is the point:
+these webviews open arbitrary pages, and a capability with a `remote` block would
+hand `write_text_file` to whatever is loaded. So anything injected into a page
+finishes its job in the page. `browser_pick` is the worked example, and the
+script it injects is a fixed `include_str!` rather than an argument, because a
+command taking JavaScript to run is a command for running any JavaScript
+anywhere.
+
+**Nothing in the chrome can be drawn over an open page**, so a receipt for
+something that happened in the panel has to be drawn in the panel. `showToast`
+gets around it by parking the pages while a toast is up, which is right for an
+update prompt and wrong for anything that would take away the thing just clicked.
 
 **Hidden terminals are `visibility: hidden`, not `display: none`.** They stay
 laid out so each can be measured and fitted to its own font size while off
