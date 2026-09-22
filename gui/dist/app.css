@@ -1301,6 +1301,14 @@ body {
   color: var(--text);
 }
 
+/* A row with nothing to do keeps its icon and its count dim. Without this the
+   icon stays at `--muted` and lights to `--text` on hover, so a disabled row
+   answers the pointer as though it were about to do something. */
+.menu button.row:disabled .ico,
+.menu button.row:disabled:hover .ico {
+  color: var(--faint);
+}
+
 /* Whose machine this is. Not a button — there is nothing to do to it, and
    making it look pressable would promise an account page that does not
    exist. */

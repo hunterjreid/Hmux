@@ -771,10 +771,19 @@ function openSettings(pane = "root") {
   };
 
   /** A plain row: an icon, a label, and something it does. */
-  const item = (href, label, onPick, { keepOpen = false, note = "" } = {}) => {
+  const item = (
+    href,
+    label,
+    onPick,
+    { keepOpen = false, note = "", disabled = false } = {}
+  ) => {
     const button = document.createElement("button");
     button.className = "row";
     button.type = "button";
+    // Greyed rather than absent when there is nothing to do. A row that is
+    // there and dim says there are no pages open; a row that vanishes says
+    // nothing at all, and leaves you looking for a menu entry you remember.
+    button.disabled = disabled;
     button.appendChild(icon(href));
     const text = document.createElement("span");
     text.textContent = label;
@@ -871,6 +880,26 @@ function openSettings(pane = "root") {
         });
       },
       { note: appVersion ? `v${appVersion}` : "" }
+    );
+
+    separator();
+
+    // The clean slate for the browsers, and here rather than on a rail row
+    // because it is not about any one terminal: every row owns a few of the
+    // pages and no row owns the lot, so right-clicking one to clear all of
+    // them would be picking a subject for a sentence that has none.
+    //
+    // Not asked about first. Nothing running is lost — the shells and their
+    // scrollback are not touched — so the cost of pressing it by mistake is
+    // reopening a page, and a confirmation is worth more than that only when
+    // the answer is always yes. The count on the row is what makes it
+    // deliberate: you can see how many pages are open before you reach for it.
+    const pages = openTabCount();
+    item(
+      "#i-close",
+      "Close all browser tabs",
+      () => closeAllTabs().catch((e) => showError("close all browser tabs", e)),
+      { disabled: !pages, note: pages ? String(pages) : "" }
     );
 
     separator();
@@ -3024,6 +3053,72 @@ async function closeTerminal(id) {
   pushBrowserBounds();
   await refresh();
   saveLayoutSoon();
+}
+
+/** Every open page in the window, across every terminal. */
+function openTabCount() {
+  let n = 0;
+  for (const [, entry] of terminals) n += tabsOf(entry).length;
+  return n;
+}
+
+/**
+ * Give every browser in the window back, and leave the terminals alone.
+ *
+ * Tabs belong to a terminal rather than to the window, so what is open beside
+ * the shell you are in is a fraction of what is open: a window that feels full
+ * of pages is mostly pages you cannot see, sitting beside terminals you are
+ * not looking at, and clearing them a tab at a time means visiting every row
+ * in the rail to find out where they were. This is the one sweep.
+ *
+ * Not a loop over `closeTab`. That one works out which tab to land on next,
+ * decides whether the panel it just emptied should shut, animates it, redraws
+ * the strip and schedules a save — on every tab. None of that has any meaning
+ * when the answer for all of them is "none, yes, and once at the end".
+ *
+ * Released explicitly and one at a time, because the release is the point. A
+ * tab is a number held against a fixed pool of webviews and the pool is the
+ * scarce thing: dropping the tabs without handing the slots back leaks them
+ * for the life of the window, and the next new tab then reports that every
+ * browser is taken by pages that no longer exist.
+ */
+async function closeAllTabs() {
+  const count = openTabCount();
+  if (!count) return;
+
+  // Unsaved text in the editor belongs to one tab, and every tab is going.
+  if (editing) closeEditor();
+
+  for (const [, entry] of terminals) {
+    for (const tab of tabsOf(entry)) {
+      await invoke("browser_release", { tab: tab.id }).catch(() => {});
+    }
+    entry.tabs = [];
+    entry.activeTab = null;
+    // The panel has nothing left to show. Left open it is a column of empty
+    // chrome taking width off the terminal, which is the opposite of what
+    // clearing the pages was for.
+    entry.browserOpen = false;
+  }
+
+  els.url.value = "";
+  setChrome(false);
+  renderTabs();
+  // Animated, because for the terminal in front of you this is the panel
+  // leaving rather than a switch between terminals — and the slide is what
+  // gives the width back instead of leaving the terminal laid out around a
+  // panel that has gone.
+  applyBrowserVisibility(true);
+  pushBrowserBounds(true);
+  renderButtons();
+  saveLayout();
+
+  showToast({
+    key: "tabs-cleared",
+    title: `Closed ${count} ${count === 1 ? "page" : "pages"}`,
+    body: "Your terminals and everything running in them are untouched.",
+    life: 3400,
+  });
 }
 
 // ------------------------------------------------------------------ sidebar
