@@ -507,62 +507,63 @@ body {
   color: var(--faint);
 }
 
-/* Open, it becomes the box it used to be all the time. */
-.rail-head.open {
-  gap: calc(4px + 0.11em);
-  padding: 0 calc(5px + 0.15em);
-  border-radius: 0.62em;
-  border: 1px solid transparent;
-  background: var(--elev);
-  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
-}
-
-.rail-head.open:focus-within {
-  border-color: var(--line);
-  background: var(--elev-hi);
-}
-
-/* The magnifier is a button when closed and a label when open — the same
-   element either way, so opening does not move it. */
-.rail-search-btn {
-  flex: none;
-}
-
-.rail-head.open .rail-search-btn {
-  pointer-events: none;
-}
-
-/* The input takes the room between the two buttons, and none at all until
-   there is a search to type into. */
-.rail-head #filter {
-  flex: 1;
-  min-width: 0;
-}
-
-.rail-head:not(.open) #filter {
-  display: none;
-}
-
-/* Pushed to the far end while the row is closed, so the plus sits where it
-   will still be once the search opens between them. */
-.rail-head:not(.open) #new-btn {
+/* The plus sits at the far end, the tidy button at the near one. */
+.rail-head #new-btn {
   margin-left: auto;
 }
 
-.rail-head input {
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  /* Follows the rail rather than holding its own size, or zooming the list
-     leaves the box you search it with behind. */
-  font-size: 0.96em;
-  outline: none;
-  user-select: text;
+/* A flick of the wand on every press, so it visibly answers even when there
+   was nothing to tidy. */
+#tidy-btn.spin .ico {
+  animation: k-wand 420ms var(--ease);
 }
 
-.rail-head input::placeholder {
-  color: var(--faint);
+@keyframes k-wand {
+  40% {
+    transform: rotate(-14deg) scale(1.12);
+  }
+}
+
+/* While OpenAI is naming things the sparks twinkle in turn.
+ *
+ * Switched on through a custom property, not a selector: the sparks live in
+ * the shadow tree of a `<use>`, which a selector like `#tidy-btn .spark` cannot
+ * reach, but an inherited custom property crosses into it. */
+#tidy-btn.working {
+  --spark-anim: k-twinkle;
+}
+
+.spark {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: var(--spark-anim, none) 1.1s ease-in-out infinite;
+}
+
+.spark-b {
+  animation-delay: 0.36s;
+}
+
+.spark-c {
+  animation-delay: 0.72s;
+}
+
+@keyframes k-twinkle {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.25;
+    transform: scale(0.45) rotate(45deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #tidy-btn.spin .ico,
+  .spark {
+    animation: none;
+  }
 }
 
 .rail-list {
@@ -574,8 +575,7 @@ body {
   gap: 3px;
 }
 
-/* Nothing matched the filter. */
-/* The magnifier and the plus, and the buttons around them. Left at their fixed
+/* The tidy button and the plus, and the buttons around them. Left at their fixed
    sizes they shrink to dots against large text.
  *
  * Sized from the variable rather than in `em`, which is the trap here: these

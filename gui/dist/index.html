@@ -32,9 +32,17 @@
       <symbol id="i-plus" viewBox="0 0 14 14">
         <path d="M7 2.5v9M2.5 7h9" />
       </symbol>
-      <symbol id="i-search" viewBox="0 0 14 14">
-        <circle cx="6.2" cy="6.2" r="4" />
-        <path d="M9.2 9.2 12 12" />
+      <!-- A wand and three sparks: the tidy button. The sparks are separate
+           paths with their own classes so they can twinkle one after another
+           while OpenAI is naming things. -->
+      <symbol id="i-tidy" viewBox="0 0 14 14">
+        <path d="M2.2 11.8 8.4 5.6" />
+        <path class="spark spark-a" fill="currentColor" stroke="none"
+              d="M10.6 1.2Q10.95 2.95 12.7 3.3 10.95 3.65 10.6 5.4 10.25 3.65 8.5 3.3 10.25 2.95 10.6 1.2Z" />
+        <path class="spark spark-b" fill="currentColor" stroke="none"
+              d="M11.9 7.2Q12.12 8.28 13.2 8.5 12.12 8.72 11.9 9.8 11.68 8.72 10.6 8.5 11.68 8.28 11.9 7.2Z" />
+        <path class="spark spark-c" fill="currentColor" stroke="none"
+              d="M5.3 1.1Q5.5 2.1 6.5 2.3 5.5 2.5 5.3 3.5 5.1 2.5 4.1 2.3 5.1 2.1 5.3 1.1Z" />
       </symbol>
       <!-- The lobed gear, the same one Cryptoflip uses, rather than the ring
            with spokes that was here. A ring with eight ticks around it reads
@@ -198,14 +206,14 @@
 
       <!-- Left: the terminal rail -->
       <aside class="rail">
-        <!-- Search and new-terminal, together. Both are things you do TO the
+        <!-- Tidy and new-terminal, together. Both are things you do TO the
              list, so they belong at the top of it rather than in the window's
-             title bar. The search is a button until you want it. -->
+             title bar. -->
         <div class="rail-head" id="rail-head">
-          <button class="icon-btn rail-search-btn" id="filter-btn" title="Search terminals">
-            <svg class="ico"><use href="#i-search" /></svg>
+          <button class="icon-btn" id="tidy-btn"
+                  title="Tidy: name terminals from what is in them, close empty ones">
+            <svg class="ico"><use href="#i-tidy" /></svg>
           </button>
-          <input id="filter" placeholder="Search" spellcheck="false" />
           <button class="icon-btn" id="new-btn" title="New terminal">
             <svg class="ico"><use href="#i-plus" /></svg>
           </button>

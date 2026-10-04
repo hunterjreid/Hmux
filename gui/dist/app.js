@@ -1,11 +1,11 @@
-// hmux — UI logic.
+// hmux â€” UI logic.
 //
 // Four responsibilities:
 //   1. keep one xterm.js instance per terminal, alive across view switches
 //   2. keep the sidebar buttons in sync with what Rust reports
 //   3. tell Rust where to put the native browser webview, since it does not
 //      flow with the DOM
-//   4. be the window frame — the OS decorations are off, so dragging and the
+//   4. be the window frame â€” the OS decorations are off, so dragging and the
 //      minimise/maximise/close buttons are ours
 
 const { invoke } = window.__TAURI__.core;
@@ -33,8 +33,7 @@ const els = {
   tabs: document.getElementById("tabs"),
   tabNew: document.getElementById("tab-new"),
   rowMenu: document.getElementById("row-menu"),
-  filter: document.getElementById("filter"),
-  filterBtn: document.getElementById("filter-btn"),
+  tidyBtn: document.getElementById("tidy-btn"),
   railHead: document.getElementById("rail-head"),
   titlebar: document.getElementById("titlebar"),
   toast: document.getElementById("toast"),
@@ -52,7 +51,7 @@ const els = {
  * Bring across everything the old name stored.
  *
  * Every preference this window keeps is under a `mux.` key, and the rename
- * moved them all to `hmux.` — which does not migrate anything, it abandons it.
+ * moved them all to `hmux.` â€” which does not migrate anything, it abandons it.
  * The values are still in local storage, under names nothing reads any more,
  * so the rename presented as the app quietly forgetting which side the rail
  * was on, how big the text was, how wide the panels were, which terminals were
@@ -82,7 +81,7 @@ const els = {
  *
  * Not one number for the window. A terminal running a full-screen program you
  * are reading wants to be bigger than one you keep a build log in, and they sit
- * side by side — a single size means every change to one is a change to all of
+ * side by side â€” a single size means every change to one is a change to all of
  * them. Kept out of the session file because it is about this window rather
  * than about what was running: a size chosen here should survive a machine
  * restart that the shells themselves do not.
@@ -119,9 +118,6 @@ function rememberFontSize(id, size) {
     localStorage.setItem(FONT_SIZES_KEY, JSON.stringify(fontSizes));
   } catch {}
 }
-
-/** Substring typed into the rail's search box. */
-let filterText = "";
 
 /** Surface a failure instead of swallowing it into the console. */
 function showError(where, e) {
@@ -168,7 +164,7 @@ let toastParked = false;
  *
  * Conditionally here, because it is not free. The card is 420px in the middle
  * of the window and the panel is a column at one edge, so most of the time
- * these do not touch — and taking someone's page away for a sentence that was
+ * these do not touch â€” and taking someone's page away for a sentence that was
  * never on top of it is a worse interruption than the sentence.
  */
 function parkPagesForToast() {
@@ -215,7 +211,7 @@ function hideToast() {
     el.innerHTML = "";
     el.dataset.key = "";
     // Put the page back only if it was this that took it away. Applying an
-    // update never reaches here — that ends the process instead.
+    // update never reaches here â€” that ends the process instead.
     if (toastParked) {
       toastParked = false;
       pushBrowserBounds(true);
@@ -228,7 +224,7 @@ function hideToast() {
  *
  * `key` is what tells those two apart. A download reports itself many times a
  * second, and rebuilding the card on each would restart the bar's own
- * transition from nothing every time — the number would climb and the bar
+ * transition from nothing every time â€” the number would climb and the bar
  * would sit still, which is a worse lie than no bar at all. Same key, so the
  * same elements are kept and only the width and the text change.
  *
@@ -249,7 +245,7 @@ function showToast({ key, title, body, percent, action, bad = false, life = 0 })
     el.innerHTML = `
       <div class="toast-head">
         <span class="toast-title"></span>
-        <button class="toast-x" title="Dismiss">✕</button>
+        <button class="toast-x" title="Dismiss">âœ•</button>
       </div>
       <div class="toast-body"></div>
       ${percent === undefined ? "" : `<div class="toast-bar"><span></span></div>`}
@@ -320,7 +316,7 @@ let renamingId = null;
 // that number, because a webview cannot be made once the app is running.
 //
 // Tabs belong to the terminal rather than to the window, so switching
-// terminals switches the whole set — the pages you had open beside one shell
+// terminals switches the whole set â€” the pages you had open beside one shell
 // are not the pages you had open beside another.
 
 /** Tab ids are unique for the life of the window; the pool is keyed by them. */
@@ -345,8 +341,8 @@ let draggingTabId = null;
  *
  * Tabs arrive in whatever order links happened to be clicked, so the one being
  * worked in ends up buried among a dozen it opened. Nothing downstream depends
- * on this array's order — a tab's browser is claimed by its id, and the pool is
- * keyed by that — so rearranging it is a pure display change and cannot put a
+ * on this array's order â€” a tab's browser is claimed by its id, and the pool is
+ * keyed by that â€” so rearranging it is a pure display change and cannot put a
  * page and its webview out of step.
  */
 function moveTab(entry, id, beforeId) {
@@ -483,7 +479,7 @@ async function closeTab(entry, tabId) {
   }
 
   // Nothing left to show, so the panel has no reason to be open. Animated,
-  // because it is the panel leaving rather than a switch between terminals —
+  // because it is the panel leaving rather than a switch between terminals â€”
   // and the slide ends by refitting the terminal, which is what gives the
   // width back rather than leaving it laid out around a panel that has gone.
   const emptied = !tabs.length;
@@ -511,7 +507,7 @@ function selectTab(entry, tabId) {
   applyEditor();
   applyLoading();
   // Which webview is over the slot is decided by the tab handed to Rust, so
-  // the panel has to be told again even though nothing about it moved — and
+  // the panel has to be told again even though nothing about it moved â€” and
   // told that this one counts, since the rectangle is identical.
   requestAnimationFrame(() => pushBrowserBounds(true));
 }
@@ -662,14 +658,14 @@ function tabTitle(tab) {
 /**
  * Whether the layout is reflected: terminals on the right, the page on the
  * left. Kept here rather than in the session file because it is about the
- * window, not about what was running in it — a preference that should hold
+ * window, not about what was running in it â€” a preference that should hold
  * even for a session started from nothing.
  */
 const MIRROR_KEY = "hmux.mirrored";
 // Reflected by default: the terminals on the right, the page on the left.
 //
 // The rail is a list you glance at and the terminal is the thing you look at,
-// and the window buttons are in the top right — so the side the pointer is
+// and the window buttons are in the top right â€” so the side the pointer is
 // already near is the side the terminal should be on. The stored value still
 // wins, so a window that has been swapped stays swapped; this only decides
 // what a window with no opinion yet does.
@@ -700,7 +696,7 @@ function applyLoading() {
  *
  * There is no account row of the usual kind because there is no account. hmux
  * keeps nothing on a server and has nothing to sign in to, so the foot of the
- * menu names the Windows user — the only identity involved — and there is no
+ * menu names the Windows user â€” the only identity involved â€” and there is no
  * "log out", which would be an offer to leave somewhere you have never been.
  */
 /** The project's own page. Help goes here rather than to a README on GitHub:
@@ -889,8 +885,8 @@ function openSettings(pane = "root") {
     // pages and no row owns the lot, so right-clicking one to clear all of
     // them would be picking a subject for a sentence that has none.
     //
-    // Not asked about first. Nothing running is lost — the shells and their
-    // scrollback are not touched — so the cost of pressing it by mistake is
+    // Not asked about first. Nothing running is lost â€” the shells and their
+    // scrollback are not touched â€” so the cost of pressing it by mistake is
     // reopening a page, and a confirmation is worth more than that only when
     // the answer is always yes. The count on the row is what makes it
     // deliberate: you can see how many pages are open before you reach for it.
@@ -904,13 +900,13 @@ function openSettings(pane = "root") {
 
     separator();
 
-    // Not a button. There is nothing to do to it — it is here to say whose
+    // Not a button. There is nothing to do to it â€” it is here to say whose
     // machine this is, which is the whole of what hmux knows about you.
     const who = document.createElement("div");
     who.className = "menu-account";
     const avatar = document.createElement("span");
     avatar.className = "avatar";
-    const name = accountName || "…";
+    const name = accountName || "â€¦";
     avatar.textContent = name.slice(0, 1).toUpperCase();
     who.appendChild(avatar);
     const label = document.createElement("span");
@@ -956,7 +952,7 @@ let backgroundSource = localStorage.getItem(BG_SOURCE_KEY) || "";
 /**
  * One picture, and off.
  *
- * There were six, plus a file picker, plus four strength levels — which is a
+ * There were six, plus a file picker, plus four strength levels â€” which is a
  * gallery, and this is a terminal. Every one of them ends up at the same job:
  * something to rest the eye on in the dark behind the text. Six ways to do
  * that is five decisions nobody wanted to make, and the shipped images were
@@ -980,7 +976,7 @@ const DEFAULT_BACKGROUND = SHIPPED_BACKGROUNDS[0];
  *
  * Taken from the image rather than offered as a setting. There was a menu of
  * four strengths, which existed because one number could not serve a pale
- * daylight photograph and a near-black dither at once — but that is a fact
+ * daylight photograph and a near-black dither at once â€” but that is a fact
  * about the pictures, and the pictures are the thing that knows it. Each one
  * carries its own pair, so choosing a background is the whole of the choice.
  */
@@ -993,8 +989,8 @@ let backgroundAt = DEFAULT_BACKGROUND.at;
  * xterm has to be told separately. It paints an opaque rectangle of the theme
  * background under every cell unless `allowTransparency` is on, so without
  * this the image is behind a terminal that is not see-through and nothing
- * shows. The flag costs something to have on — the renderer can no longer
- * assume what is under a glyph — which is why it is only set when there is
+ * shows. The flag costs something to have on â€” the renderer can no longer
+ * assume what is under a glyph â€” which is why it is only set when there is
  * actually an image, rather than left on for everyone.
  */
 function applyBackground() {
@@ -1077,7 +1073,7 @@ async function setBackground(data, source = "") {
   backgroundSource = background ? source : "";
   try {
     localStorage.setItem(BG_SOURCE_KEY, backgroundSource);
-    // Any choice at all, including turning it off, is a choice — see
+    // Any choice at all, including turning it off, is a choice â€” see
     // `BG_CHOSEN_KEY`.
     localStorage.setItem(BG_CHOSEN_KEY, "1");
   } catch {}
@@ -1152,7 +1148,7 @@ async function showAbout() {
     version = await invoke("app_version");
   } catch {}
 
-  // A working copy says 0.1.0 whatever has been done to it — the release
+  // A working copy says 0.1.0 whatever has been done to it â€” the release
   // workflow is what writes a real number, and only into its own build. So on
   // a local build the version is not a version, and saying so is the
   // difference between "you have an old one" and "you have your own".
@@ -1175,7 +1171,7 @@ async function showAbout() {
  * A field rather than a list of options, because the answer is a path and there
  * is no set of them small enough to offer. The buttons are what make it usable
  * without a folder picker: the directory people want is nearly always either
- * the one they are already working in — which the daemon reports per terminal —
+ * the one they are already working in â€” which the daemon reports per terminal â€”
  * or their home folder, which is the empty string and not something anyone
  * should have to work out how to type.
  *
@@ -1312,7 +1308,7 @@ const THEME = {
   // having no scrollbar at all. A scrollbar is also a position indicator, and
   // one you cannot see does not indicate anything.
   // Toned down with the rest of the palette. The bar only appears on hover
-  // now, so it no longer has to be bright enough to be ignorable — it has to
+  // now, so it no longer has to be bright enough to be ignorable â€” it has to
   // be dim enough not to be the brightest thing on a near-black terminal.
   scrollbarSliderBackground: "#3A3F47",
   scrollbarSliderHoverBackground: "#4E545E",
@@ -1360,7 +1356,7 @@ function makeTerminal(id, initial = null) {
     // The one thing that loses it is the buffer filling: the front is dropped,
     // and the lines you were reading stop existing. Nothing can hold a position
     // in text that has been discarded, so the only lever is how long it takes
-    // to get there — and a session that talks for an hour goes through ten
+    // to get there â€” and a session that talks for an hour goes through ten
     // thousand lines without trying.
     scrollback: 50000,
     // Rows per notch of the wheel. xterm multiplies this by the wheel's own
@@ -1396,7 +1392,7 @@ function makeTerminal(id, initial = null) {
 
   // What gets written to disk on every save. Serializing the buffer gives the
   // text as it was *drawn*; the pty byte stream that produced it is a different
-  // thing entirely and cannot be replayed — see saveLayout.
+  // thing entirely and cannot be replayed â€” see saveLayout.
   const serializer = new SerializeAddon.SerializeAddon();
   term.loadAddon(serializer);
 
@@ -1409,7 +1405,7 @@ function makeTerminal(id, initial = null) {
   );
 
   // The web links addon only knows http and https. Local paths get printed as
-  // links just as often — a screenshot, a log, a file a tool just wrote — and
+  // links just as often â€” a screenshot, a log, a file a tool just wrote â€” and
   // a webview displays those perfectly well.
   registerFileLinks(term, id);
 
@@ -1498,7 +1494,7 @@ function makeTerminal(id, initial = null) {
     term.resize(initial.cols, initial.rows);
   }
 
-  // Every keystroke goes straight to the pty. No local echo — the shell echoes.
+  // Every keystroke goes straight to the pty. No local echo â€” the shell echoes.
   //
   // Except this terminal's answers to the shell's own questions. A program can
   // ask where the cursor is or what the terminal is, and xterm.js answers on
@@ -1513,7 +1509,7 @@ function makeTerminal(id, initial = null) {
 
   // Ctrl+Shift+L belongs to the app. Returning false keeps xterm from also
   // sending it down the pty; the window handler still sees it and opens the
-  // address bar. Ctrl+L is deliberately left alone — clearing the screen is
+  // address bar. Ctrl+L is deliberately left alone â€” clearing the screen is
   // the shell's, and taking it would be a worse trade than a longer chord.
   term.attachCustomKeyEventHandler((e) => {
     if (e.ctrlKey && e.shiftKey && (e.key === "L" || e.key === "l")) return false;
@@ -1567,7 +1563,7 @@ function makeTerminal(id, initial = null) {
   });
 
   // Attach state. Output can arrive before the replay lands, so live chunks
-  // are queued until we know which sequence the replay reached — otherwise
+  // are queued until we know which sequence the replay reached â€” otherwise
   // anything in both places gets written twice.
   const entry = {
     term,
@@ -1584,7 +1580,7 @@ function makeTerminal(id, initial = null) {
     //
     // These exist so a fit that lands on the size the shell already has sends
     // nothing. Starting them at zero meant the first fit after opening a window
-    // always disagreed and always resized — and ConPTY answers a resize by
+    // always disagreed and always resized â€” and ConPTY answers a resize by
     // redrawing the whole screen, which an inline TUI answers by drawing its
     // banner again *below* the last one rather than over it. Reopening a window
     // at the size you left it should be silent, and this is what makes it so.
@@ -1606,8 +1602,8 @@ function makeTerminal(id, initial = null) {
     // to follow the end from an `isUserScrolling` flag it sets whenever the
     // scroll element reports a smaller offset than it had, and a reflow that
     // shortens the scroll area makes the browser report exactly that. So a
-    // refit — a window resize, a splitter drag, the browser panel opening,
-    // arriving at a terminal that had been sized for a different layout —
+    // refit â€” a window resize, a splitter drag, the browser panel opening,
+    // arriving at a terminal that had been sized for a different layout â€”
     // could latch "the user has scrolled up" on a terminal nobody had touched.
     // From then on its output piled up below a viewport that never moved, and
     // switching to it landed part way up an hour of history: the random
@@ -1632,7 +1628,7 @@ function makeTerminal(id, initial = null) {
   term.onRender(() => {
     const b = term.buffer.active;
     if (b.viewportY >= b.baseY) {
-      // At the end, however it got there — output arriving, a scroll back
+      // At the end, however it got there â€” output arriving, a scroll back
       // down, typing at the prompt, a buffer short enough to have no history
       // at all. Following is what this terminal is doing now.
       entry.follow = true;
@@ -1651,7 +1647,7 @@ function makeTerminal(id, initial = null) {
   // What counts as the reader deciding where the view sits.
   //
   // Every one of these is captured rather than caught, so a handler that stops
-  // the event on its way down — Ctrl+wheel is the zoom, not a scroll — never
+  // the event on its way down â€” Ctrl+wheel is the zoom, not a scroll â€” never
   // reaches here and is never mistaken for scrolling. `mousedown` covers both
   // scrollbars, xterm's own and the browser's, and the drag-past-the-edge that
   // selecting text does; Chromium reports a press on a native scrollbar as a
@@ -1804,8 +1800,8 @@ function toFileUrl(path) {
  * required to end one either.
  *
  * The old pattern required an extension and let anything at all come before
- * it, lazily. That is wrong in both directions at once. A directory — `C:\dir\`
- * — has no extension, so the match kept going through whatever followed it
+ * it, lazily. That is wrong in both directions at once. A directory â€” `C:\dir\`
+ * â€” has no extension, so the match kept going through whatever followed it
  * until it found any dot with two to six characters after it, which in
  * `C:\...\qwen3-hf-files\ (Explorer's open), 2.05 GB total:` is the `.05` of a
  * file size. Sixty characters of prose became one link. And in the other
@@ -1816,8 +1812,8 @@ function toFileUrl(path) {
  * path begins with a space.** `My Document.txt` starts with an M and is part of
  * the path; ` and it is 2.05 GB` starts with a space and is not. That single
  * rule reads both of those correctly without knowing anything about English,
- * and it is asserted rather than consumed so that `.gitignore` — a name that is
- * nothing but its extension — still gets to start with its own dot.
+ * and it is asserted rather than consumed so that `.gitignore` â€” a name that is
+ * nothing but its extension â€” still gets to start with its own dot.
  *
  * A trailing `\` is then enough on its own to make a directory a link, and the
  * whole match has to end at whitespace or punctuation. That last part is what
@@ -1838,7 +1834,7 @@ const PATH_FILE = `${PATH_START}${PATH_CHAR}*?\\.[A-Za-z0-9]{1,12}`;
 const PATH_LEAF = String.raw`[^\\\r\n<>"|*?:\s]+`;
 /**
  * Where a path is allowed to stop. The `\.(?:\s|$)` arm is a full stop ending a
- * sentence — `Saved to C:\out\report.txt.` — rather than a suffix.
+ * sentence â€” `Saved to C:\out\report.txt.` â€” rather than a suffix.
  */
 const PATH_END = String.raw`(?=[\s,;:)\]}'"]|\.(?:\s|$)|$)`;
 /**
@@ -1891,7 +1887,7 @@ const LINK_PATTERNS = [
     // A domain written the way people write them: `trenchies.co`, no scheme.
     //
     // The lookbehind is what keeps this out of paths and addresses that
-    // another pattern already owns — `...\cdn.prod.website-files.com\...` is
+    // another pattern already owns â€” `...\cdn.prod.website-files.com\...` is
     // part of a file path, and `https://silka.co.nz` is already a link. Both
     // end in something this would otherwise match in the middle of.
     find: new RegExp(
@@ -2007,7 +2003,7 @@ function scheduleButtons() {
  * How long the layout has to hold still before the pty is told about it.
  *
  * ConPTY repaints its entire screen for every resize it is handed, and an
- * interactive TUI answers that repaint by drawing its banner again — below the
+ * interactive TUI answers that repaint by drawing its banner again â€” below the
  * previous copy, not over it. Dragging a window edge or a splitter fires a
  * resize event per frame, each one a genuinely different column count, so one
  * drag across a couple of hundred pixels produced dozens of duplicate banners.
@@ -2027,7 +2023,7 @@ const RESIZE_QUIET_MS = 400;
  * How long a window takes to stop changing size after it opens.
  *
  * Opening one is not a single size. The window is built, the webview is sized
- * into it, and then the size it was last left at is restored — three different
+ * into it, and then the size it was last left at is restored â€” three different
  * layouts, far enough apart that the ordinary quiet period lets all three
  * through. Each one is a repaint, and a repaint is another copy of a TUI's
  * banner, so a window reopening on a session running one came back with the
@@ -2039,7 +2035,7 @@ const startedAt = performance.now();
 /**
  * Whether the window has finished arriving at its size.
  *
- * Until it has, no native browser is placed at all — see `pushBrowserBounds`.
+ * Until it has, no native browser is placed at all â€” see `pushBrowserBounds`.
  * The columns are still moving, and a webview put over a rectangle taken while
  * they are is a page left hanging outside the window.
  */
@@ -2135,7 +2131,7 @@ function pinBottom(entry) {
  * Narrowing a terminal re-wraps every long line, so the same text occupies more
  * rows than it did and every row number below the change moves. xterm keeps the
  * viewport on the same NUMBER, which after a reflow is the one thing that is no
- * longer the same place — the view ends up hundreds of lines from where it was.
+ * longer the same place â€” the view ends up hundreds of lines from where it was.
  *
  * A marker is the buffer's own answer. It is attached to a line and carried
  * along by the reflow, so asking it afterwards where that line ended up gives
@@ -2163,7 +2159,7 @@ function preservingView(entry, change) {
   //
   // `follow` is asked first, and it is the answer even when the viewport says
   // otherwise. A terminal that is following can already have been dragged off
-  // the end by an earlier reflow — that is the bug it exists to fix — and
+  // the end by an earlier reflow â€” that is the bug it exists to fix â€” and
   // reading the viewport here would take that displacement as a place worth
   // preserving and anchor it in, one reflow deepening the last.
   const atBottom = entry.follow || buffer.viewportY >= buffer.baseY;
@@ -2194,7 +2190,7 @@ function preservingView(entry, change) {
       // this attempt is against yesterday's height; the queued one runs when
       // the number is real. The scroll event the shortened area fires arrives
       // later still, and is exactly what used to latch xterm into thinking the
-      // reader had scrolled up — the second pin is what unlatches it.
+      // reader had scrolled up â€” the second pin is what unlatches it.
       entry.term.scrollToBottom();
       pinSoon(entry);
     } else if (anchor && anchor.line >= 0) {
@@ -2222,7 +2218,7 @@ function syncSize(id) {
   // Every terminal, not only the one on screen.
   //
   // They all occupy the same box, so a change to that box is a change to all
-  // of them — but not the same change, because each has its own font size and
+  // of them â€” but not the same change, because each has its own font size and
   // therefore its own number of columns in the same number of pixels. Fitting
   // each one to what it would actually be is what makes switching free: the
   // terminal you arrive at is already the right size, so nothing reflows in
@@ -2241,7 +2237,7 @@ function syncSize(id) {
  *
  * The grid gives the terminal a floor of 220px and the window has a minimum
  * size, so a host narrower than this is never a real state anybody is looking
- * at — it is the width during a collapse, a slide, or the moment before the
+ * at â€” it is the width during a collapse, a slide, or the moment before the
  * columns are first resolved.
  */
 const FIT_FLOOR_PX = 140;
@@ -2254,8 +2250,8 @@ function fitTerminal(id, entry) {
   // A fit is destructive in a way that reading a size is not: it writes a
   // column count into the terminal and reflows the whole scrollback to match,
   // and nothing afterwards knows the number was nonsense. Measuring the host
-  // at a few pixels — which happens while a panel is collapsing, and happened
-  // on startup before the columns had resolved — put the terminal at three
+  // at a few pixels â€” which happens while a panel is collapsing, and happened
+  // on startup before the columns had resolved â€” put the terminal at three
   // columns and left it there, wrapping every line into a ribbon down the side
   // of an empty pane. Skipping is safe because anything that changes the box
   // fires the observer again once it has a real width.
@@ -2268,7 +2264,7 @@ function fitTerminal(id, entry) {
   // half: it writes the column count and reflows the entire scrollback to
   // match, and nothing downstream can tell that the number was nonsense. The
   // addon divides the box by a cell size it measures from the DOM, and that
-  // measurement comes back wrong if it is taken before the font has loaded —
+  // measurement comes back wrong if it is taken before the font has loaded â€”
   // a cell far wider than the real one, and a column count in single digits.
   // Reading the proposal first means a bad measurement costs nothing.
   let proposed = null;
@@ -2328,7 +2324,7 @@ function fitTerminal(id, entry) {
  * on.
  *
  * Every terminal fills the same area, so this is the size they are going to be
- * anyway — the only question is whether they find out now or the moment you
+ * anyway â€” the only question is whether they find out now or the moment you
  * switch to them. Later is worse: a pty resized on the way in makes ConPTY
  * repaint its whole screen, so the terminal you just opened redraws itself in
  * front of you, and a full-screen program draws its banner a second time.
@@ -2548,7 +2544,7 @@ let browserWasOpen = false;
  * where it went.
  *
  * The slot keeps its width throughout, so this is a move rather than a resize
- * — the page slides in whole and the window edge clips what has not landed.
+ * â€” the page slides in whole and the window edge clips what has not landed.
  *
  * The terminal is refitted once, at the end. Its width is in pixels and the
  * fit reflows the entire scrollback, so doing it per frame is the one thing
@@ -2578,7 +2574,7 @@ function slideBrowser() {
 /**
  * Show or hide the browser column according to the active terminal.
  *
- * `animate` is only true when you asked for the panel — the toggle, a link, the
+ * `animate` is only true when you asked for the panel â€” the toggle, a link, the
  * keyboard. Switching between terminals goes straight to the answer, because
  * the panel arriving is news the first time and a delay every time after: a
  * terminal that has had a page open beside it all along should look like it
@@ -2593,7 +2589,7 @@ function applyBrowserVisibility(animate = false) {
   // Switching terminals is not an animation.
   //
   // `animate` already decided not to run the slide, but the slide was only
-  // ever the native page being carried along — the columns themselves are
+  // ever the native page being carried along â€” the columns themselves are
   // transitioned in the stylesheet and moved anyway. So going from a terminal
   // with a page open to one without played the panel closing, and going back
   // played it opening, for a change you did not make to a panel you were not
@@ -2611,7 +2607,7 @@ function applyBrowserVisibility(animate = false) {
 
   // The bar stays up for as long as the panel does. It used to collapse to a
   // hover strip so a browser opened as the page and nothing else, which was
-  // right when the bar held only an address — but it now holds the way out of
+  // right when the bar held only an address â€” but it now holds the way out of
   // the panel, and a close button you have to find by hovering is not one.
   setChrome(open);
 
@@ -2634,7 +2630,7 @@ function applyBrowserVisibility(animate = false) {
   // Nothing is animating, so stop anything that still is.
   //
   // A slide left running belongs to a state that no longer exists, and while
-  // one is running the bounds are sent unclamped — that is what lets a page
+  // one is running the bounds are sent unclamped â€” that is what lets a page
   // hang off the window edge and slide in. Switching terminals part way
   // through an open then applied those unclamped bounds to a terminal whose
   // browser is shut, which is a page appearing where there should be none.
@@ -2749,7 +2745,7 @@ async function openInBrowserPanel(id, url) {
   // `addTab` makes the new tab this terminal's active one, but that is this
   // window's own bookkeeping: which webview is actually over the slot is
   // Rust's, and it changes only when it is told. Told here, because nothing
-  // else on this path does — the slide only runs when the panel was shut, so
+  // else on this path does â€” the slide only runs when the panel was shut, so
   // a link clicked with the panel already open opened its tab, moved the
   // highlight in the strip, and left the previous page on screen. The strip
   // said one thing and the panel showed another, and the page you asked for
@@ -2772,7 +2768,7 @@ async function toggleBrowser() {
   //
   // It opens either way. This used to give up and leave `browserOpen` false
   // when no page could be had, which happens as soon as the browser pool is
-  // spoken for — and the pool is twelve for the whole window, so a few
+  // spoken for â€” and the pool is twelve for the whole window, so a few
   // terminals with a few tabs each reach it easily. The button then did
   // nothing at all, with no panel and no reason given, which reads as a broken
   // button rather than as a limit. The panel is the user's to open; the note
@@ -2974,7 +2970,7 @@ let railIds = [];
  * daemon would put the fifteen seconds on the click instead of after it.
  *
  * Lifted once several listings in a row agree the terminal is gone, rather than
- * on the first one that leaves it out — which is what let all of the above
+ * on the first one that leaves it out â€” which is what let all of the above
  * happen anyway. `list_terminals` answers from a cached list the daemon
  * refreshes by event, and the `terminals` event is pushed rather than asked
  * for, so a snapshot taken before the close can arrive after one taken after
@@ -3073,7 +3069,7 @@ function openTabCount() {
  *
  * Not a loop over `closeTab`. That one works out which tab to land on next,
  * decides whether the panel it just emptied should shut, animates it, redraws
- * the strip and schedules a save — on every tab. None of that has any meaning
+ * the strip and schedules a save â€” on every tab. None of that has any meaning
  * when the answer for all of them is "none, yes, and once at the end".
  *
  * Released explicitly and one at a time, because the release is the point. A
@@ -3105,7 +3101,7 @@ async function closeAllTabs() {
   setChrome(false);
   renderTabs();
   // Animated, because for the terminal in front of you this is the panel
-  // leaving rather than a switch between terminals — and the slide is what
+  // leaving rather than a switch between terminals â€” and the slide is what
   // gives the width back instead of leaving the terminal laid out around a
   // panel that has gone.
   applyBrowserVisibility(true);
@@ -3119,6 +3115,254 @@ async function closeAllTabs() {
     body: "Your terminals and everything running in them are untouched.",
     life: 3400,
   });
+}
+
+// ------------------------------------------------------------------ tidy
+//
+// One button that does the housekeeping a long session leaves behind: every
+// terminal gets a name that says what it is for, read off what is actually in
+// it, and the ones that are nothing but a prompt are closed.
+//
+// Read from the screen, not from the daemon. The screen is what you would look
+// at to name it yourself, and it already holds the commands you typed.
+
+/** The last rows of a terminal as text, oldest first, wrapped rows rejoined. */
+function screenLines(entry, max = 300) {
+  const buf = entry.term.buffer.active;
+  const out = [];
+  for (let y = Math.max(0, buf.length - max); y < buf.length; y++) {
+    const line = buf.getLine(y);
+    if (!line) continue;
+    const text = line.translateToString(true);
+    if (line.isWrapped && out.length) out[out.length - 1] += text;
+    else out.push(text);
+  }
+  return out.map((s) => s.trimEnd()).filter((s) => s.trim());
+}
+
+/**
+ * A prompt row, and whatever was typed after it.
+ *
+ * Returns null for a row that is not a prompt, and "" for a bare one.
+ */
+const PROMPTS = [
+  /^PS [A-Za-z]:\\[^>]*>\s?(.*)$/, // PowerShell
+  /^[A-Za-z]:\\[^>]*>(.*)$/, // cmd
+  /^\S+@\S+:[^$#]*[$#]\s?(.*)$/, // user@host:~/dir$
+  /^[$#â¯â€º]\s?(.*)$/, // a prompt on a row of its own (Git Bash, starship)
+];
+
+function promptCommand(line) {
+  const text = line.trim();
+  for (const re of PROMPTS) {
+    const m = re.exec(text);
+    if (m) return m[1].trim();
+  }
+  return null;
+}
+
+/** What a shell prints before you have done anything. */
+const BANNER = [
+  /^Windows PowerShell$/i,
+  /^PowerShell \d/i,
+  /^Copyright \(C\) Microsoft/i,
+  /^Install the latest PowerShell/i,
+  /aka\.ms\/PS/i,
+  /^Microsoft Windows \[Version/i,
+  /^\(c\) Microsoft Corporation/i,
+  /^Loading personal and system profiles took/i,
+  /^\S+@\S+ MINGW(32|64)\b/, // the row above a Git Bash prompt
+];
+
+/** Commands that leave a terminal as empty as they found it. */
+const NOTHING = /^(cls|clear|exit)?$/i;
+
+/**
+ * Whether a terminal has nothing in it worth keeping.
+ *
+ * Only a banner and bare prompts. Anything typed, anything printed or any page
+ * open beside it, and it stays.
+ *
+ * `busy` is deliberately not asked. A shell ConPTY has just repainted, after a
+ * resize or the window reopening, reads as busy for a moment with nothing
+ * running, and that kept three bare prompts open on the first real tidy.
+ * Something actually running put its command after a prompt, so the screen
+ * already says so.
+ */
+function isEmptyTerminal(entry) {
+  if (!entry.info) return false;
+  if (tabsOf(entry).length) return false;
+  return screenLines(entry).every((line) => {
+    if (BANNER.some((re) => re.test(line.trim()))) return true;
+    const cmd = promptCommand(line);
+    return cmd !== null && NOTHING.test(cmd);
+  });
+}
+
+/** The folder a terminal is in, as a name: its last part, or ~ for home. */
+function folderName(cwd) {
+  if (!cwd) return null;
+  const path = cwd.replace(/[\\/]+$/, "");
+  if (/^[A-Za-z]:\\Users\\[^\\]+$/i.test(path) || /^\/(c\/)?(home|Users)\/[^/]+$/i.test(path)) {
+    return "~";
+  }
+  const last = path.split(/[\\/]/).pop();
+  return last || path;
+}
+
+/**
+ * What a terminal is doing, from the title a program gave it.
+ *
+ * Claude Code and the like put what they are working on in the title, which is
+ * a better name than anything that can be read off the screen. Shells put their
+ * own path or name there, which says nothing, so those are thrown away.
+ */
+function titleActivity(title) {
+  if (!title) return null;
+  const text = title.replace(/^[^\p{L}\p{N}]+/u, "").trim();
+  if (!text) return null;
+  if (/[\\/]/.test(text)) return null;
+  if (/^(windows )?powershell$|^pwsh$|^cmd(\.exe)?$|^bash$|^zsh$|^administrator:/i.test(text)) {
+    return null;
+  }
+  if (/^claude( code)?$/i.test(text)) return "claude";
+  return text;
+}
+
+/** Commands that are moving around or looking, not what a terminal is for. */
+const INCIDENTAL = new Set([
+  "cd", "ls", "dir", "pwd", "cls", "clear", "echo", "cat", "type", "exit",
+  "git", "code", "explorer", "start", "where", "which", "set-location", "get-childitem",
+]);
+
+/** A short label for a command line, or null when it is incidental. */
+function describeCommand(cmd) {
+  const words = cmd.replace(/^&\s*/, "").split(/\s+/).map((w) => w.replace(/^["']|["']$/g, ""));
+  while (words.length > 1 && /^(npx|sudo|uv|uvx)$/i.test(words[0])) words.shift();
+  const exe = (words[0] || "").split(/[\\/]/).pop().replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase();
+  if (!exe || INCIDENTAL.has(exe)) return null;
+  const arg = words.slice(1).find((w) => !w.startsWith("-"));
+
+  if (/^(npm|pnpm|yarn|bun)$/.test(exe)) {
+    const verb = arg === "run" ? words[words.indexOf("run") + 1] : arg;
+    return verb && !/^(i|install|add|ci)$/.test(verb) ? verb : exe;
+  }
+  if (exe === "cargo") return arg ? `cargo ${arg}` : exe;
+  if (/^(python3?|py|node|deno|tsx|ts-node)$/.test(exe)) {
+    return arg ? arg.split(/[\\/]/).pop() : exe;
+  }
+  if (exe === "ssh" && arg) return `ssh ${arg.split("@").pop()}`;
+  return exe;
+}
+
+/** A program recognised by what it draws, for when its command has scrolled away. */
+function recogniseProgram(lines) {
+  const text = lines.slice(-80).join("\n");
+  if (/Claude Code|âœ» Welcome to Claude/.test(text)) return "claude";
+  if (/OpenAI Codex|>_ Codex/.test(text)) return "codex";
+  if (/Gemini CLI/.test(text)) return "gemini";
+  return null;
+}
+
+/** A name for a terminal, from what is in it. Null when there is nothing to go on. */
+function suggestName(entry) {
+  const lines = screenLines(entry);
+  const folder = folderName(entry.info && entry.info.cwd);
+
+  const titled = titleActivity(entry.shellTitle);
+  if (titled && titled !== "claude") return titled.slice(0, 22);
+
+  let what = titled;
+  if (!what) {
+    for (let i = lines.length - 1; i >= 0 && !what; i--) {
+      const cmd = promptCommand(lines[i]);
+      if (cmd) what = describeCommand(cmd);
+    }
+  }
+  what = what || recogniseProgram(lines);
+
+  if (what && folder && folder !== "~") return `${what} Â· ${folder}`;
+  return what || folder;
+}
+
+/** Whether a tidy is already waiting on OpenAI, so a second press does not start another. */
+let tidying = false;
+
+/**
+ * Name every terminal from its contents, then close the ones with nothing in them.
+ *
+ * Every terminal is renamed, including ones named by hand: the point of the
+ * button is that the rail says what is going on now, and a name typed an hour
+ * ago is exactly the kind that has stopped saying it.
+ *
+ * The names come from OpenAI through `describe_terminals`, a plain short line
+ * about each, about ten seconds for the whole batch while the wand sparkles.
+ * If that fails they are guessed locally from the last command and the folder,
+ * so the press still does something. The empty ones are closed last, once the
+ * names have landed, so the rail changes once rather than shrinking first and
+ * relabelling ten seconds later.
+ */
+async function tidyTerminals() {
+  if (tidying) return;
+  tidying = true;
+  els.tidyBtn.classList.add("working");
+  try {
+    const ids = railIds.filter((id) => terminals.has(id));
+
+    // Never all of them: a window with no terminal left is not tidy, it is
+    // empty. The one in front is the one kept.
+    const empty = ids.filter((id) => isEmptyTerminal(terminals.get(id)));
+    if (empty.length === ids.length) {
+      const keep = empty.includes(activeId) ? activeId : empty[0];
+      empty.splice(empty.indexOf(keep), 1);
+    }
+    const nameable = ids.filter((id) => !empty.includes(id));
+
+    let names = {};
+    let failed = null;
+    if (nameable.length) {
+      try {
+        names = await invoke("describe_terminals", {
+          screens: nameable.map((id) => {
+            const entry = terminals.get(id);
+            return {
+              id,
+              cwd: (entry.info && entry.info.cwd) || null,
+              text: screenLines(entry, 60).join("\n"),
+            };
+          }),
+        });
+      } catch (e) {
+        failed = String(e);
+        logInfo(`tidy: describe_terminals failed: ${failed}`);
+      }
+    }
+
+    for (const id of nameable) {
+      const entry = terminals.get(id);
+      // Closed while OpenAI was thinking.
+      if (!entry) continue;
+      const name = names[id] || suggestName(entry);
+      if (!name || name === entry.customName) continue;
+      entry.customName = name;
+    }
+    renderButtons();
+
+    for (const id of empty) {
+      // Re-checked: something may have been typed into it while waiting.
+      const entry = terminals.get(id);
+      if (!entry || !isEmptyTerminal(entry)) continue;
+      await closeTerminal(id);
+    }
+
+    // No toast. The rail changing is the answer, and a box over the terminal
+    // saying so is in the way. A failure goes to the log; the names are then
+    // the local guesses, which still beat "powershell 10".
+    saveLayoutSoon();
+  } finally {
+    tidying = false;
+    els.tidyBtn.classList.remove("working");
+  }
 }
 
 // ------------------------------------------------------------------ sidebar
@@ -3163,7 +3407,7 @@ function beginRename(id, labelEl) {
     done = true;
     // Only when the text actually changed. Clicking a name and then clicking
     // away commits, and without this that pins the shell's own name as a
-    // custom one — the terminal looks identical but has quietly stopped
+    // custom one â€” the terminal looks identical but has quietly stopped
     // following what the shell calls itself.
     if (commit && input.value.trim() !== original) {
       const value = input.value.trim();
@@ -3198,7 +3442,7 @@ function beginRename(id, labelEl) {
 /**
  * How long the dots keep going after the work does.
  *
- * A command is not a steady stream of output — it is bursts with gaps, and the
+ * A command is not a steady stream of output â€” it is bursts with gaps, and the
  * gaps are longer than the thing that measures them. Without a hold the dots
  * flicker on and off through a single build, which reads as something being
  * wrong rather than as something being underway. The hold costs nothing: a
@@ -3213,7 +3457,7 @@ function wantedState(info) {
   // Shown on the terminal you are looking at as well as the ones you are not.
   // The argument for hiding it was that the output is already on screen, but a
   // row that only lights up for other terminals means the one you are in is the
-  // one you cannot tell the state of at a glance — and it makes the rail read
+  // one you cannot tell the state of at a glance â€” and it makes the rail read
   // differently depending on where you happen to be standing.
   const entry = terminals.get(info.id);
   const heldOver =
@@ -3250,7 +3494,7 @@ function updateRightSlot(row, info) {
   const current = row.querySelector(".state");
 
   // The important line in this function. If the row is already showing what it
-  // should be showing, it is left completely alone — because replacing it, or
+  // should be showing, it is left completely alone â€” because replacing it, or
   // even removing and re-adding the same thing, restarts the animation. This
   // runs several times a second, so anything else means the dots never get
   // past their first frame.
@@ -3284,7 +3528,7 @@ function updateRightSlot(row, info) {
  * rhythm and finds four.
  *
  * Setting `startTime` to zero says the animation began at the document's own
- * time origin — a moment every indicator agrees on however long after it each
+ * time origin â€” a moment every indicator agrees on however long after it each
  * was created, so their phases come out identical rather than merely close.
  *
  * The alternative was a negative `animation-delay`, and it is worse twice over:
@@ -3294,7 +3538,7 @@ function updateRightSlot(row, info) {
  * the delay was worked out.
  *
  * The stagger between the three dots is part of each animation's own delay, so
- * it survives untouched — they still travel, now together with every other row.
+ * it survives untouched â€” they still travel, now together with every other row.
  */
 function startTogether(el) {
   try {
@@ -3382,7 +3626,7 @@ function openContextMenu(x, y, items) {
  * The ids come from the daemon and are reused after a reboot, so a stale pin
  * can land on a terminal that is not the one that was pinned. That is a wrong
  * row near the top of a list, which costs a right-click to undo, and the
- * alternative — dropping every pin whenever the daemon restarts — costs them
+ * alternative â€” dropping every pin whenever the daemon restarts â€” costs them
  * all every time. The cheaper mistake wins.
  */
 const PINNED_KEY = "hmux.pinned";
@@ -3507,17 +3751,12 @@ function renderButtons() {
       e.info ?? {
         id,
         title: "shell",
-        status: "starting…",
+        status: "startingâ€¦",
         busy: false,
         running: false,
         alive: true,
       }
   );
-
-  const needle = filterText.trim().toLowerCase();
-  const matching = needle
-    ? infos.filter((i) => displayName(i).toLowerCase().includes(needle))
-    : infos;
 
   // Pinned first, then whatever order the rail has been dragged into, then
   // the daemon's own, which is the order the terminals were started in.
@@ -3530,7 +3769,7 @@ function renderButtons() {
     const at = railOrder.indexOf(id);
     return at < 0 ? Number.MAX_SAFE_INTEGER : at;
   };
-  const shown = [...matching].sort((a, b) => {
+  const shown = [...infos].sort((a, b) => {
     const pin = (pinned.has(b.id) ? 1 : 0) - (pinned.has(a.id) ? 1 : 0);
     if (pin) return pin;
     return rank(a.id) - rank(b.id);
@@ -3562,7 +3801,7 @@ function renderButtons() {
     for (const el of existing.values()) el.remove();
     const empty = document.createElement("div");
     empty.className = "rail-empty";
-    empty.textContent = infos.length ? "No terminal matches." : "No terminals.";
+    empty.textContent = "No terminals.";
     els.list.appendChild(empty);
   }
 
@@ -3725,7 +3964,7 @@ function renderButtons() {
   // already does, and twice was once too many. The window title still does,
   // because that is what the taskbar reads.
   const active = infos.find((i) => i.id === activeId);
-  document.title = active ? `${displayName(active)} — Hmux` : "Hmux";
+  document.title = active ? `${displayName(active)} â€” Hmux` : "Hmux";
 }
 
 /** Guards against a second poll adopting the same terminal mid-attach. */
@@ -3798,7 +4037,7 @@ let boundsTimer = null;
 let boundsFailed = false;
 
 /**
- * @param force true when what is being shown has actually changed — a tab, a
+ * @param force true when what is being shown has actually changed â€” a tab, a
  *              terminal, the panel opening. Rust skips identical layouts, and
  *              this is what tells it not to.
  */
@@ -3810,8 +4049,8 @@ function pushBrowserBounds(force = false) {
   // slide in whole instead of being resized on every frame.
   //
   // It is only ever correct while the panel is moving. When the layout simply
-  // cannot give the panel its full width — a wide rail and a narrow window
-  // leave less room than the browser was set to — the same overhang is a page
+  // cannot give the panel its full width â€” a wide rail and a narrow window
+  // leave less room than the browser was set to â€” the same overhang is a page
   // shoved off the side of the window, with the rest of the app laid out as
   // though nothing were wrong, because a rectangle does not know it was
   // clipped. So outside the slide, what gets sent is the part actually inside
@@ -3833,8 +4072,8 @@ function pushBrowserBounds(force = false) {
 
   // Nothing is placed until the window has stopped deciding how big it is.
   //
-  // Opening one is three layouts in quick succession — built, sized, then
-  // restored to the size it was last left at — and a native webview put over a
+  // Opening one is three layouts in quick succession â€” built, sized, then
+  // restored to the size it was last left at â€” and a native webview put over a
   // rectangle measured during any of them is a page hanging off the side of
   // the window until something moves. It cannot be clipped, so it is not a
   // stray pixel at the edge: it is a white panel across the desktop, and it
@@ -3931,7 +4170,7 @@ function armPicker() {
 // ------------------------------------------------------------- session state
 //
 // What the app remembers between runs. The shells themselves do not survive
-// quitting — that needs a daemon owning the ptys — but the set of terminals,
+// quitting â€” that needs a daemon owning the ptys â€” but the set of terminals,
 // what you called them, where they were working and what they had printed all
 // come back, so reopening lands you where you left off rather than at a bare
 // prompt.
@@ -3957,8 +4196,8 @@ const SAVED_LINES = 3000;
  *
  * The buffer is serialized rather than the pty output being kept, because the
  * two are not the same thing and only one of them replays. What arrives from
- * ConPTY is a stream of instructions — move to row 4, erase to end of line,
- * hide the cursor — and it is written against the screen that existed when it
+ * ConPTY is a stream of instructions â€” move to row 4, erase to end of line,
+ * hide the cursor â€” and it is written against the screen that existed when it
  * was sent. Feeding it to an empty terminal later does not reproduce that
  * screen; it repeats the drawing, out of order and against the wrong contents.
  * ConPTY also redraws everything on every resize, so most of that stream is
@@ -3986,7 +4225,7 @@ const BLANK_ROW =
  * terminal those fifty are no longer padding: they are rows, and the next save
  * writes them back with another screen's worth underneath. Restart often
  * enough and the buffer is mostly nothing, which the scrollbar then has to
- * represent — a page of output with a thumb sized for a thousand rows.
+ * represent â€” a page of output with a thumb sized for a thousand rows.
  *
  * Nothing is below them by definition, so dropping them loses nothing, and the
  * climb they were padding for shrinks by exactly the number dropped.
@@ -4076,7 +4315,7 @@ function saveLayout() {
  * happened while nobody was looking.
  *
  * What is still taken from the session file is what the daemon has no opinion
- * about — what you renamed a terminal to, and which page was open beside it.
+ * about â€” what you renamed a terminal to, and which page was open beside it.
  */
 async function attachToLive(live, saved) {
   const byId = new Map((saved?.terminals ?? []).map((t) => [t.id, t]));
@@ -4419,7 +4658,7 @@ async function checkForUpdate(explicit = false) {
     // The size travels with the address. GitHub has just told us how big each
     // one is, and this is the only place that answer is free: asking the
     // download host separately is three more round trips for a number already
-    // in hand, and a HEAD cannot answer it anyway — see `update_download`.
+    // in hand, and a HEAD cannot answer it anyway â€” see `update_download`.
     const assets = new Map(
       (release.assets || []).map((a) => [
         a.name,
@@ -4427,7 +4666,7 @@ async function checkForUpdate(explicit = false) {
       ])
     );
 
-    // A release missing any of the three is not installable — the window would
+    // A release missing any of the three is not installable â€” the window would
     // come back paired with a daemon it does not match, or with none at all.
     // Better to keep running the version that works and say nothing.
     const missing = UPDATE_BINARIES.filter((n) => !assets.has(n));
@@ -4474,7 +4713,7 @@ async function downloadUpdate(tag, current, assets) {
     updateReady = tag;
     showUpdateToast({ tag, current, phase: "ready" });
   } catch (e) {
-    // Nothing has been swapped — staging is a separate directory — so the
+    // Nothing has been swapped â€” staging is a separate directory â€” so the
     // running install is untouched and the next check will try again.
     //
     // Said out loud, not only logged. This failing silently is what made a
@@ -4525,7 +4764,7 @@ function showUpdateToast({ tag, current, phase, percent }) {
       label: "Restart to update",
       run: async (go) => {
         go.disabled = true;
-        go.textContent = "Restarting…";
+        go.textContent = "Restartingâ€¦";
         try {
           // Does not return: the new window is started and this one exits.
           await invoke("update_apply");
@@ -4584,7 +4823,7 @@ function restorePanelWidths() {
  * not reasonable on another: a rail dragged to seven hundred pixels on a large
  * monitor, restored on a laptop, leaves the terminal with nothing. The grid
  * already refuses to let the terminal go below its floor, but that only stops
- * it disappearing — it does not stop both panels being absurd.
+ * it disappearing â€” it does not stop both panels being absurd.
  *
  * Neither side may exceed this share of the window, so the terminal always has
  * at least the rest. Applied on startup and on every resize, because a window
@@ -4659,7 +4898,7 @@ function makeSplitter(el, varName, opts) {
     //
     // The columns themselves are CSS and follow the pointer instantly. The
     // terminal is clipped to its panel for the length of the drag, the browser
-    // is parked, and both are put right once on release — which is the only
+    // is parked, and both are put right once on release â€” which is the only
     // size either of them was ever worth doing the work for.
   });
 
@@ -4725,41 +4964,14 @@ async function main() {
   loadVersion();
   document.getElementById("err-close").onclick = () => (els.err.hidden = true);
 
-  /**
-   * Open or shut the search.
-   *
-   * Shutting always clears it. A collapsed box still filtering the list is a
-   * list that is missing terminals for a reason you cannot see.
-   */
-  const setSearchOpen = (open) => {
-    els.railHead.classList.toggle("open", open);
-    if (open) {
-      els.filter.focus();
-      return;
-    }
-    els.filter.value = "";
-    filterText = "";
-    renderButtons();
+  els.tidyBtn.onclick = () => {
+    // Restarted on every press, so a second click still turns.
+    els.tidyBtn.classList.remove("spin");
+    void els.tidyBtn.offsetWidth;
+    els.tidyBtn.classList.add("spin");
+    tidyTerminals().catch((e) => showError("tidy", e));
   };
-
-  els.filterBtn.onclick = () => setSearchOpen(true);
-
-  els.filter.addEventListener("input", () => {
-    filterText = els.filter.value;
-    renderButtons();
-  });
-  els.filter.addEventListener("keydown", (e) => {
-    e.stopPropagation();
-    if (e.key === "Escape") {
-      setSearchOpen(false);
-      els.filter.blur();
-    }
-  });
-  // Clicking away puts it back, but only when nothing was typed: leaving a
-  // search you are still reading the results of would be its own annoyance.
-  els.filter.addEventListener("blur", () => {
-    if (!els.filter.value) setSearchOpen(false);
-  });
+  els.tidyBtn.addEventListener("animationend", () => els.tidyBtn.classList.remove("spin"));
 
   // Any click anywhere puts the context menu away, including the one that
   // chose an item from it.
@@ -4780,7 +4992,7 @@ async function main() {
   // It used to collapse to a strip the moment the pointer left it, on the
   // argument that a browser should be the page and nothing else. That was true
   // when the bar held only an address. It now holds the address you are on,
-  // the way back out of the panel, and the tabs sit above it — none of which
+  // the way back out of the panel, and the tabs sit above it â€” none of which
   // are worth hunting for by hovering, and an address you can only see by
   // pointing at it is an address you cannot read while you work.
 
@@ -4796,7 +5008,7 @@ async function main() {
       invoke("window_toggle_fullscreen")
         .then((now) => {
           // The command answers with the state it ended up in, so the title bar
-          // knows whether it is still a drag surface — and whether maximise is
+          // knows whether it is still a drag surface â€” and whether maximise is
           // still a thing this window can be asked for. See `refreshMaxIcon`.
           fullscreen = now;
           refreshMaxIcon();
@@ -4887,7 +5099,7 @@ async function main() {
     fromRight: () => !mirrored,
   });
 
-  // Output for ANY terminal is applied, not just the visible one — that is
+  // Output for ANY terminal is applied, not just the visible one â€” that is
   // what keeps background terminals current instead of frozen.
   await listen("terminal-output", (event) => applyChunk(event.payload));
 
@@ -4949,7 +5161,7 @@ async function main() {
     }
 
     // A finished page is the moment its address is finally true, so the tab is
-    // named then rather than waiting for the next poll — which may not come
+    // named then rather than waiting for the next poll â€” which may not come
     // for a second, or at all while the address bar has focus.
     if (!loading) {
       try {
@@ -4971,7 +5183,7 @@ async function main() {
   // Refit whenever the box the terminal lives in actually changes size.
   //
   // Everything else here fits in a `requestAnimationFrame` after doing whatever
-  // moved the columns — which is one frame into a transition that runs for
+  // moved the columns â€” which is one frame into a transition that runs for
   // `--slide`, 260ms. What gets measured is therefore the width the panel was
   // *leaving*, and nothing measures the width it arrives at. Opening the window
   // was the visible case: the browser column collapses on startup, the fit
@@ -4980,8 +5192,8 @@ async function main() {
   // wrapping every line in a narrow ribbon down the left of an empty pane.
   //
   // An observer is the fix rather than another timeout because it is answering
-  // the question that was actually being asked — has this element changed size
-  // — instead of guessing at when it might have. It fires for each frame of a
+  // the question that was actually being asked â€” has this element changed size
+  // â€” instead of guessing at when it might have. It fires for each frame of a
   // transition and once more at the resting size; `fitTerminal` returns
   // immediately when the column count has not changed, so the intermediate
   // frames cost a measurement and nothing else.
@@ -5015,7 +5227,7 @@ async function main() {
   // Captured on the way down rather than caught on the way up. The terminal's
   // own viewport handles the wheel and stops it whenever it has somewhere to
   // scroll, so bubbling only ever reached here at the very top or the very
-  // bottom of the scrollback — zoom appeared to work in two places and be
+  // bottom of the scrollback â€” zoom appeared to work in two places and be
   // broken everywhere else.
   els.host.addEventListener(
     "wheel",
@@ -5041,7 +5253,7 @@ async function main() {
       // rewrap those cause finishes after this handler has returned. Asking
       // "are we at the bottom" partway through that gets the answer for a
       // layout that is already gone, and `preservingView` then faithfully
-      // holds a position nobody chose — which is the view jumping half a
+      // holds a position nobody chose â€” which is the view jumping half a
       // screen up on every notch of the wheel. `follow` is the same answer at
       // every point in that sequence, because it is not a measurement.
       pinBottom(entry);
@@ -5077,7 +5289,7 @@ async function main() {
   );
 
   await restoreOrStart();
-  // Always closed — see `restoreTabs`. The markup already says so, so this
+  // Always closed â€” see `restoreTabs`. The markup already says so, so this
   // agrees with what is on screen rather than changing it; it is here to wire
   // the rest of the state that goes with a shut panel.
   applyBrowserVisibility();
@@ -5106,7 +5318,7 @@ async function main() {
   // Fit again once the terminal font has actually loaded.
   //
   // Every column count here is the box divided by the width of a cell, and the
-  // cell is measured from the DOM — so a fit that happens before the font is
+  // cell is measured from the DOM â€” so a fit that happens before the font is
   // ready measures a fallback face, or nothing at all, and lands on a number
   // that has no relationship to what is on screen. It is not a small error
   // either: it produced a three-column terminal in a window nineteen hundred
@@ -5140,7 +5352,7 @@ async function main() {
       // An empty answer means the browser is on the new tab page, which it
       // also is for the second or two a restored tab spends loading. Letting
       // that clear an address the tab already has is how a tab showing a shop
-      // ends up labelled "New tab" — and if the address bar happens to have
+      // ends up labelled "New tab" â€” and if the address bar happens to have
       // focus the poll stops running, so it never corrects itself. A tab that
       // has been given an address only loses it by being sent home on purpose.
       const changed = u ? tab.url !== u : false;
@@ -5148,13 +5360,13 @@ async function main() {
       // Guard against the tab having been switched mid-await.
       if (activeTab(terminals.get(activeId) || {}) === tab) {
         // The bar shows where the tab is meant to be, not only where the
-        // browser got to. A page that failed to load — a dev server that is
-        // not running, most often — leaves the browser sitting on the new tab
+        // browser got to. A page that failed to load â€” a dev server that is
+        // not running, most often â€” leaves the browser sitting on the new tab
         // page, and blanking the bar to match hides the one thing that would
         // let you retry it. The address stays, and reload does what it says.
         const show = u || (tab.url && tab.url !== HOME_PAGE ? tab.url : "");
         if (show !== els.url.value) els.url.value = show;
-        // The strip is named after the address, so it follows it — including
+        // The strip is named after the address, so it follows it â€” including
         // when the page navigated itself and nobody here asked it to.
         if (changed) renderTabs();
       }

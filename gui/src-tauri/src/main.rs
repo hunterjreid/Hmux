@@ -16,6 +16,7 @@
 //! [`browser`] for what that costs.
 
 mod browser;
+mod describe;
 mod persist;
 mod sessions;
 mod shells;
@@ -840,6 +841,7 @@ fn main() {
             read_text_file,
             write_text_file,
             restore_terminal,
+            describe::describe_terminals,
             update::update_download,
             update::update_staged,
             update::update_apply,

@@ -73,9 +73,9 @@ A rail of terminals down one side, the active one filling the middle, and
 
 ```
 ┌──────────────────────────────────────────────────────┬──────────────┐
-│ HMUX       ◧                       ─    □    ✕       │            + │
+│ HMUX       ◧                       ─    □    ✕       │              │
 ├───────────────────────┬──────────────────────────────┼──────────────┤
-│         ────          │ Reply from 127.0.0.1         │ ⌕ Search     │
+│         ────          │ Reply from 127.0.0.1         │ ✦          + │
 ├───────────────────────┤ Reply from 127.0.0.1         │ claude       │
 │                       │ Reply from 127.0.0.1         │   node     ◜ │
 │     its own page      │                              │ cmd 2        │
@@ -86,6 +86,13 @@ A rail of terminals down one side, the active one filling the middle, and
 The rail is on the right by default: it is a list you glance at, the terminal
 is the thing you look at, and the window buttons are already up in that corner.
 **Settings → Layout** swaps the two, and the choice is remembered per window.
+
+The wand at the top of the rail tidies it: every terminal is renamed to a
+short label for what is going on in it (`Cryptoflip deploy`, `Kea held
+balance`), and terminals holding nothing but a bare prompt are closed. The
+labels come from OpenAI through the [Codex CLI](https://github.com/openai/codex)
+on your own login, so they need `codex` on PATH and signed in; without it the
+names are guessed locally from the last command and the folder.
 
 Each terminal owns a browser, so switching terminals switches the page:
 scroll position, forms and logins all still there, because it is a separate
